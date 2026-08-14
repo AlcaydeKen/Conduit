@@ -1,7 +1,7 @@
 # Implementation Roadmap: Conduit
 
-> **Current Phase:** Phase 3: Backlog & Sprint Management
-> **Status:** Phases 1–2 complete and verified against live Neon, GitHub OAuth, and a browser.
+> **Current Phase:** Phase 4: Machine API & Tenant Isolation
+> **Status:** Phases 1–2 complete. Phase 3 complete except card filtering.
 > **Reference Spec:** See `SPEC.md` for schema, security rules, and endpoints.
 
 ---
@@ -81,10 +81,36 @@
 ---
 
 ## Phase 3: Backlog & Sprint Management
-- [ ] Build Backlog view and UI for moving cards between backlog and sprints.
-- [ ] Implement Sprint management UI (Create, Start, Complete sprints).
-- [ ] Build card filtering by column, assignee, and priority.
-- [ ] **Verification:** `pnpm build` succeeds without type errors.
+- [x] Build Backlog view and UI for moving cards between backlog and sprints.
+- [x] Implement Sprint management UI (Create, Start, Complete sprints).
+- [ ] Build card filtering by column, assignee, and priority. *(not requested in the
+      Phase 3 instruction; the only item left before Phase 3 closes)*
+- [x] **Verification:** `pnpm build` succeeds without type errors.
+  - `pnpm verify:ordering` — 14 checks, now including board/backlog scope independence.
+  - `pnpm verify:sprints` — 25 checks over HTTP: create, validation, the one-active-sprint
+    rule, byte-identical 404s on unknown sprint ids, a card dragged to the backlog and back,
+    completion with carry-over, and the double-complete and carry-to-self refusals.
+  - `pnpm verify:api` — 15 checks, re-run after the move endpoint was reworked.
+  - Browser: card dragged into the backlog rail and back, sprint created through the form,
+    and the 409 surfaced as readable copy rather than a raw status.
+
+### Phase 3 notes
+- Position keys are scoped to what is displayed together, not to a column. A column holds
+  cards from every sprint plus the backlog, so `OrderScope` is either
+  `{ board, columnId, sprintId }` or `{ backlog }`. Sharing one space across sprints would
+  make relative keys meaningless and let one sprint's rebalance rewrite another's rows.
+- `sprint_id` belongs on the move endpoint rather than a separate assign call: dropping a
+  card into the backlog still needs a position within the backlog. Omitted leaves the sprint
+  alone, explicit null means the backlog.
+- Sprint completion treats the right-most column as done. That is a convention, not a schema
+  fact — there is no done flag on `columns` — so it is derived from `position`, not from a
+  name match on "Done" that a rename would silently break.
+- `createSprint` and `completeSprint` wrap their dialog close in `flushSync`. `router.replace`
+  runs inside a transition, and a pending transition defers every other queued update, so the
+  dialog stayed on screen while its portal was torn down by the navigation. Found in the
+  browser, not by any type or lint check.
+- base-ui triggers ignore synthetic `.click()`. Browser checks against dialogs and selects
+  need real pointer events, or they report a false failure.
 
 ---
 

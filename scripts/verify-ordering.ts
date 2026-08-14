@@ -1,18 +1,23 @@
 /**
- * Proves the equal-neighbour trap is real and that the move path survives it.
+ * Proves the equal-neighbour trap is real, that the move path survives it, and
+ * that board and backlog key spaces are independent.
  *
  * Run: pnpm verify:ordering
  *
- * Creates throwaway cards in the first column of workspace 1, forces a
- * duplicate position key, and drives the same code path the move endpoint uses.
- * Cleans up after itself.
+ * Creates throwaway cards in the first column of workspace 1 and drives the
+ * same code path the move endpoint uses. Cleans up after itself.
  */
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { generateKeyBetween } from "fractional-indexing";
 
 import { db } from "@/db";
-import { cards, columns, workspaces } from "@/db/schema";
-import { computePosition, readColumnOrder, rebalanceColumn } from "@/lib/ordering";
+import { cards, columns, sprints, workspaces } from "@/db/schema";
+import {
+  computePosition,
+  readOrder,
+  rebalance,
+  type OrderScope,
+} from "@/lib/ordering";
 
 let failures = 0;
 
@@ -41,12 +46,32 @@ async function main() {
     .limit(1);
   if (!column) throw new Error("no columns — run pnpm db:seed first");
 
-  console.log(`workspace #${workspace.id}, column "${column.name}" (#${column.id})`);
+  const [sprint] = await db
+    .select({ id: sprints.id })
+    .from(sprints)
+    .where(eq(sprints.workspaceId, workspace.id))
+    .orderBy(asc(sprints.id))
+    .limit(1);
+  if (!sprint) throw new Error("no sprint — run pnpm db:seed first");
+
+  const boardScope: OrderScope = {
+    kind: "board",
+    workspaceId: workspace.id,
+    columnId: column.id,
+    sprintId: sprint.id,
+  };
+  const backlogScope: OrderScope = {
+    kind: "backlog",
+    workspaceId: workspace.id,
+  };
+
+  console.log(
+    `workspace #${workspace.id}, column "${column.name}" (#${column.id}), sprint #${sprint.id}`,
+  );
 
   const created: number[] = [];
 
   try {
-    // 1. Two cards land in the same gap in the same instant. SPEC accepts this.
     const duplicate = "a5";
     const inserted = await db
       .insert(cards)
@@ -54,12 +79,14 @@ async function main() {
         {
           workspaceId: workspace.id,
           columnId: column.id,
+          sprintId: sprint.id,
           title: "[verify] duplicate A",
           position: duplicate,
         },
         {
           workspaceId: workspace.id,
           columnId: column.id,
+          sprintId: sprint.id,
           title: "[verify] duplicate B",
           position: duplicate,
         },
@@ -75,14 +102,13 @@ async function main() {
     } catch (error) {
       threw = true;
       check(
-        `generateKeyBetween("${duplicate}", "${duplicate}") throws: ${(error as Error).message}`,
+        `generateKeyBetween("${duplicate}", "${duplicate}") throws: "${(error as Error).message}"`,
         true,
       );
     }
     check("naive path would 500", threw);
 
-    // 2. Order as displayed, before healing.
-    const before = await readColumnOrder(workspace.id, column.id);
+    const before = await readOrder(boardScope);
     const beforeIds = before.map((row) => row.id);
     check(
       "duplicate keys present before healing",
@@ -94,11 +120,9 @@ async function main() {
       beforeIds.indexOf(cardA) < beforeIds.indexOf(cardB),
     );
 
-    // 3. Drive the real move path: land a card between the two equal keys.
     console.log("\n2. move path heals instead of throwing");
     const result = await computePosition(
-      workspace.id,
-      column.id,
+      boardScope,
       { prev: duplicate, next: duplicate },
       (fresh) => ({
         prev: fresh.find((row) => row.id === cardA)?.position ?? null,
@@ -110,8 +134,7 @@ async function main() {
     if (!result.ok) throw new Error("computePosition refused");
     check("it reported a rebalance", result.rebalanced);
 
-    // 4. Column is healed and order is preserved exactly.
-    const after = await readColumnOrder(workspace.id, column.id);
+    const after = await readOrder(boardScope);
     check(
       "all keys distinct after rebalance",
       new Set(after.map((row) => row.position)).size === after.length,
@@ -123,33 +146,31 @@ async function main() {
       { before: beforeIds, after: after.map((row) => row.id) },
     );
 
-    // 5. The computed key really does sort between the two former duplicates.
     console.log("\n3. the new key lands in the right gap");
-    const [insertedMiddle] = await db
+    const [middle] = await db
       .insert(cards)
       .values({
         workspaceId: workspace.id,
         columnId: column.id,
+        sprintId: sprint.id,
         title: "[verify] lands between",
         position: result.position,
       })
       .returning({ id: cards.id });
-    created.push(insertedMiddle.id);
+    created.push(middle.id);
 
-    const final = await readColumnOrder(workspace.id, column.id);
+    const final = await readOrder(boardScope);
     const finalIds = final.map((row) => row.id);
     check(
       "sorts strictly between A and B",
-      finalIds.indexOf(cardA) < finalIds.indexOf(insertedMiddle.id) &&
-        finalIds.indexOf(insertedMiddle.id) < finalIds.indexOf(cardB),
+      finalIds.indexOf(cardA) < finalIds.indexOf(middle.id) &&
+        finalIds.indexOf(middle.id) < finalIds.indexOf(cardB),
       finalIds,
     );
 
-    // 6. Inverted neighbours are refused rather than guessed at.
     console.log("\n4. inverted neighbours are refused");
     const inverted = await computePosition(
-      workspace.id,
-      column.id,
+      boardScope,
       { prev: "a9", next: "a1" },
       () => ({ prev: "a9", next: "a1" }),
     );
@@ -158,11 +179,55 @@ async function main() {
       !inverted.ok && inverted.error === "invalid_neighbors",
       inverted,
     );
+
+    // A card can sit in the same column as a sprint card while belonging to the
+    // backlog. The two are never displayed together, so they must not share a
+    // key space — otherwise a backlog rebalance would rewrite sprint cards.
+    console.log("\n5. board and backlog key spaces are independent");
+    const [backlogCard] = await db
+      .insert(cards)
+      .values({
+        workspaceId: workspace.id,
+        columnId: column.id,
+        sprintId: null,
+        title: "[verify] backlog resident",
+        position: "a0",
+      })
+      .returning({ id: cards.id });
+    created.push(backlogCard.id);
+
+    const boardIds = (await readOrder(boardScope)).map((row) => row.id);
+    const backlogIds = (await readOrder(backlogScope)).map((row) => row.id);
+
+    check(
+      "backlog card is absent from the board scope",
+      !boardIds.includes(backlogCard.id),
+      boardIds,
+    );
+    check(
+      "backlog card is present in the backlog scope",
+      backlogIds.includes(backlogCard.id),
+      backlogIds,
+    );
+    check(
+      "no sprint card leaks into the backlog scope",
+      !backlogIds.includes(cardA) && !backlogIds.includes(cardB),
+      backlogIds,
+    );
+
+    const boardKeysBefore = await readOrder(boardScope);
+    await rebalance(backlogScope);
+    const boardKeysAfter = await readOrder(boardScope);
+    check(
+      "rebalancing the backlog leaves board keys untouched",
+      JSON.stringify(boardKeysBefore) === JSON.stringify(boardKeysAfter),
+      { boardKeysBefore, boardKeysAfter },
+    );
   } finally {
     if (created.length > 0) {
       await db.delete(cards).where(inArray(cards.id, created));
     }
-    await rebalanceColumn(workspace.id, column.id);
+    await rebalance(boardScope);
     const restored = await db
       .select({ id: cards.id })
       .from(cards)

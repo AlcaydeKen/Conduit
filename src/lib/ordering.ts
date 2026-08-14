@@ -1,16 +1,51 @@
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, sql, type SQL } from "drizzle-orm";
 import { generateKeyBetween, generateNKeysBetween } from "fractional-indexing";
 
 import { db } from "@/db";
 import { cards } from "@/db/schema";
 
 /**
- * Rebalance a column once its longest key passes this. Repeated drops into the
+ * Rebalance a scope once its longest key passes this. Repeated drops into the
  * same gap grow keys without bound otherwise.
  */
 export const MAX_POSITION_LENGTH = 40;
 
+/**
+ * A card's ordering peers are exactly the cards it is displayed alongside, so
+ * the position space is scoped the same way the view is.
+ *
+ * A column holds cards from every sprint plus the backlog. Scoping keys by
+ * column alone would put cards that never appear in the same list into one
+ * ordering space — their relative keys would be meaningless, and a rebalance
+ * triggered by one sprint would rewrite another sprint's cards for no reason.
+ */
+export type OrderScope =
+  | { kind: "board"; workspaceId: number; columnId: number; sprintId: number }
+  | { kind: "backlog"; workspaceId: number };
+
 export type OrderedCard = { id: number; position: string };
+
+export function scopeWhere(scope: OrderScope): SQL {
+  if (scope.kind === "backlog") {
+    return and(
+      eq(cards.workspaceId, scope.workspaceId),
+      isNull(cards.sprintId),
+    )!;
+  }
+  return and(
+    eq(cards.workspaceId, scope.workspaceId),
+    eq(cards.columnId, scope.columnId),
+    eq(cards.sprintId, scope.sprintId),
+  )!;
+}
+
+/** The same predicate as raw SQL, for the single-statement rebalance below. */
+function scopeSql(scope: OrderScope): SQL {
+  if (scope.kind === "backlog") {
+    return sql`c.workspace_id = ${scope.workspaceId} AND c.sprint_id IS NULL`;
+  }
+  return sql`c.workspace_id = ${scope.workspaceId} AND c.column_id = ${scope.columnId} AND c.sprint_id = ${scope.sprintId}`;
+}
 
 /**
  * The canonical ordered read. `id ASC` is not decoration — duplicate position
@@ -18,40 +53,32 @@ export type OrderedCard = { id: number; position: string };
  * instant), and without the tie-breaker those two clients render different
  * orders from identical data.
  */
-export async function readColumnOrder(
-  workspaceId: number,
-  columnId: number,
-): Promise<OrderedCard[]> {
+export async function readOrder(scope: OrderScope): Promise<OrderedCard[]> {
   return db
     .select({ id: cards.id, position: cards.position })
     .from(cards)
-    .where(and(eq(cards.workspaceId, workspaceId), eq(cards.columnId, columnId)))
+    .where(scopeWhere(scope))
     .orderBy(asc(cards.position), asc(cards.id));
 }
 
 /**
- * Rewrites every key in a column to a fresh evenly-spaced sequence, preserving
- * the exact order the board currently displays.
+ * Rewrites every key in a scope to a fresh evenly-spaced sequence, preserving
+ * the exact order currently displayed.
  *
  * Written as ONE `UPDATE ... FROM (VALUES ...)` statement on purpose. The
  * neon-http driver has no interactive transaction, so a per-row update loop
  * would be N separate HTTP requests with no atomicity — a failure halfway
- * through would leave the column in a partially rebalanced state, which is
- * strictly worse than the duplicate key we came here to fix.
+ * through would leave the scope partially rebalanced, which is strictly worse
+ * than the duplicate key we came here to fix.
  */
-export async function rebalanceColumn(
-  workspaceId: number,
-  columnId: number,
-): Promise<OrderedCard[]> {
-  const current = await readColumnOrder(workspaceId, columnId);
+export async function rebalance(scope: OrderScope): Promise<OrderedCard[]> {
+  const current = await readOrder(scope);
   if (current.length === 0) return [];
 
   const keys = generateNKeysBetween(null, null, current.length);
 
   const values = sql.join(
-    current.map(
-      (card, index) => sql`(${card.id}::int, ${keys[index]}::text)`,
-    ),
+    current.map((card, index) => sql`(${card.id}::int, ${keys[index]}::text)`),
     sql`, `,
   );
 
@@ -59,7 +86,7 @@ export async function rebalanceColumn(
     UPDATE ${cards} AS c
     SET position = v.position, updated_at = now()
     FROM (VALUES ${values}) AS v(id, position)
-    WHERE c.id = v.id AND c.workspace_id = ${workspaceId}
+    WHERE c.id = v.id AND ${scopeSql(scope)}
   `);
 
   return current.map((card, index) => ({ id: card.id, position: keys[index] }));
@@ -80,21 +107,20 @@ export type PositionResult =
  * The equal-key case is the one that matters. SPEC calls a duplicate position
  * "a cosmetic tie", but it is not: once two cards share a key, the slot between
  * them is un-representable — only `id` separates them, and integers do not
- * subdivide. `generateKeyBetween("a1", "a1")` throws `a1 >= a1`, which surfaces
- * as a 500 and an optimistic drag that rubber-bands. So we heal the column
- * first, then compute against the fresh keys.
+ * subdivide. `generateKeyBetween` throws on equal arguments, which surfaces as
+ * a 500 and an optimistic drag that rubber-bands. So we heal the scope first,
+ * then compute against the fresh keys.
  */
 export async function computePosition(
-  workspaceId: number,
-  columnId: number,
+  scope: OrderScope,
   neighbors: NeighborPositions,
-  reread: (columnOrder: OrderedCard[]) => NeighborPositions,
+  reread: (fresh: OrderedCard[]) => NeighborPositions,
 ): Promise<PositionResult> {
   let { prev, next } = neighbors;
   let rebalanced = false;
 
   if (prev !== null && next !== null && prev === next) {
-    const fresh = await rebalanceColumn(workspaceId, columnId);
+    const fresh = await rebalance(scope);
     ({ prev, next } = reread(fresh));
     rebalanced = true;
   }
@@ -105,9 +131,5 @@ export async function computePosition(
     return { ok: false, error: "invalid_neighbors" };
   }
 
-  return {
-    ok: true,
-    position: generateKeyBetween(prev, next),
-    rebalanced,
-  };
+  return { ok: true, position: generateKeyBetween(prev, next), rebalanced };
 }

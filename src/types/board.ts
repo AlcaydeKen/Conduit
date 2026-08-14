@@ -52,6 +52,12 @@ export type BoardPayload = {
   selected_sprint: SprintFilter;
   columns: BoardColumn[];
   cards: BoardCard[];
+  /**
+   * Always present so the backlog rail can render beside a sprint board and
+   * cards can be dragged between the two. Empty when the backlog itself is the
+   * selected view, since then it is already rendered in the columns.
+   */
+  backlog: BoardCard[];
 };
 
 export type WorkspaceSummary = {

@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull, or } from "drizzle-orm";
 
 import { db } from "@/db";
 import {
@@ -61,10 +61,12 @@ export async function getBoard(
 ): Promise<BoardPayload> {
   const workspaceId = workspace.id;
 
+  // When a sprint is selected we also pull the backlog, in the SAME query, so
+  // the rail can render beside the board and cards can be dragged between them.
   const sprintPredicate =
     sprintFilter === "backlog"
       ? isNull(cards.sprintId)
-      : eq(cards.sprintId, sprintFilter);
+      : or(eq(cards.sprintId, sprintFilter), isNull(cards.sprintId));
 
   const [sprintRows, columnRows, cardRows] = await Promise.all([
     listSprints(workspaceId),
@@ -146,7 +148,22 @@ export async function getBoard(
       position: column.position,
       wip_limit: column.wipLimit,
     })),
-    cards: cardRows.map((row) => ({
+    // Both lists keep the `position ASC, id ASC` order the query produced.
+    cards: cardRows.filter(inSelectedView).map(toBoardCard),
+    backlog:
+      sprintFilter === "backlog"
+        ? []
+        : cardRows.filter((row) => row.sprintId === null).map(toBoardCard),
+  };
+
+  function inSelectedView(row: (typeof cardRows)[number]) {
+    return sprintFilter === "backlog"
+      ? row.sprintId === null
+      : row.sprintId === sprintFilter;
+  }
+
+  function toBoardCard(row: (typeof cardRows)[number]): BoardCard {
+    return {
       id: row.id,
       title: row.title,
       description: row.description,
@@ -160,6 +177,6 @@ export async function getBoard(
         : null,
       labels: labelsByCard.get(row.id) ?? [],
       comment_count: countsByCard.get(row.id) ?? 0,
-    })),
-  };
+    };
+  }
 }

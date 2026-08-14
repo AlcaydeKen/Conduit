@@ -11,8 +11,8 @@ import { encode } from "@auth/core/jwt";
 import { and, asc, eq } from "drizzle-orm";
 
 import { db } from "@/db";
-import { cards, columns, users, workspaces } from "@/db/schema";
-import { readColumnOrder } from "@/lib/ordering";
+import { cards, columns, sprints, users, workspaces } from "@/db/schema";
+import { readOrder, type OrderScope } from "@/lib/ordering";
 
 const BASE_URL = process.env.VERIFY_BASE_URL ?? "http://localhost:3000";
 const COOKIE_NAME = "authjs.session-token";
@@ -89,11 +89,21 @@ async function main() {
     .orderBy(asc(columns.position));
 
   const [sourceColumn, targetColumn] = columnRows;
-  const sourceCards = await readColumnOrder(workspace.id, sourceColumn.id);
+
+  const [activeSprint] = await db
+    .select({ id: sprints.id })
+    .from(sprints)
+    .where(eq(sprints.workspaceId, workspace.id))
+    .orderBy(asc(sprints.id))
+    .limit(1);
+  if (!activeSprint) throw new Error("no sprint — run pnpm db:seed");
+
+  const boardScope = (columnId: number): OrderScope => ({ kind: "board", workspaceId: workspace.id, columnId, sprintId: activeSprint.id });
+  const sourceCards = await readOrder(boardScope(sourceColumn.id));
   if (sourceCards.length === 0) throw new Error("source column empty — run pnpm db:seed");
 
   const movingId = sourceCards[0].id;
-  const targetBefore = await readColumnOrder(workspace.id, targetColumn.id);
+  const targetBefore = await readOrder(boardScope(targetColumn.id));
   const originalColumnId = sourceColumn.id;
   const originalPosition = sourceCards[0].position;
 
@@ -122,7 +132,7 @@ async function main() {
     { response: moveBody.card?.position, row: movedRow.position },
   );
 
-  const targetAfter = await readColumnOrder(workspace.id, targetColumn.id);
+  const targetAfter = await readOrder(boardScope(targetColumn.id));
   check("card is now first in the target column", targetAfter[0]?.id === movingId, targetAfter);
   check(
     "client never sent a position string",

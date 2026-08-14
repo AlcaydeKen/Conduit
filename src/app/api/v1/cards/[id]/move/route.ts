@@ -2,32 +2,34 @@ import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 
 import { db } from "@/db";
-import { cards, columns, workspaceMembers } from "@/db/schema";
-import {
-  badRequest,
-  notFound,
-  ok,
-  unauthorized,
-} from "@/lib/api/response";
+import { cards, columns, sprints, workspaceMembers } from "@/db/schema";
+import { badRequest, notFound, ok, unauthorized } from "@/lib/api/response";
 import { parseIntParam, resolveActor } from "@/lib/api/guards";
 import {
   MAX_POSITION_LENGTH,
   computePosition,
-  readColumnOrder,
-  rebalanceColumn,
+  readOrder,
+  rebalance,
+  scopeWhere,
+  type OrderScope,
 } from "@/lib/ordering";
 
-const cardId = z.number().int().positive();
+const positiveId = z.number().int().positive();
 
 /**
  * Neighbour intent, never a position string. A client-computed key would be
  * derived from board state up to one poll interval stale, which is exactly how
  * a card lands in the wrong gap.
+ *
+ * `sprint_id` is part of a move because dropping a card into the backlog still
+ * needs a position within the backlog. Omitted means "leave the sprint alone";
+ * explicit null means the backlog.
  */
 const moveSchema = z.object({
-  column_id: cardId,
-  prev_card_id: cardId.nullish(),
-  next_card_id: cardId.nullish(),
+  column_id: positiveId,
+  sprint_id: positiveId.nullish(),
+  prev_card_id: positiveId.nullish(),
+  next_card_id: positiveId.nullish(),
 });
 
 export async function POST(
@@ -41,10 +43,10 @@ export async function POST(
   const movingId = parseIntParam(id);
   if (!movingId) return notFound();
 
-  const parsed = moveSchema.safeParse(await request.json().catch(() => null));
-  if (!parsed.success) {
-    return badRequest("invalid_body", parsed.error.issues);
-  }
+  const body = await request.json().catch(() => null);
+  const parsed = moveSchema.safeParse(body);
+  if (!parsed.success) return badRequest("invalid_body", parsed.error.issues);
+
   const { column_id: columnId, prev_card_id, next_card_id } = parsed.data;
 
   if (prev_card_id === movingId || next_card_id === movingId) {
@@ -57,7 +59,11 @@ export async function POST(
   // Card lookup and membership proof in one statement. The workspace comes from
   // the row the caller provably has access to, never from the request.
   const [card] = await db
-    .select({ id: cards.id, workspaceId: cards.workspaceId })
+    .select({
+      id: cards.id,
+      workspaceId: cards.workspaceId,
+      sprintId: cards.sprintId,
+    })
     .from(cards)
     .innerJoin(
       workspaceMembers,
@@ -80,8 +86,32 @@ export async function POST(
 
   if (!targetColumn) return notFound();
 
-  // Neighbours must live in the target column of the same workspace. A card id
-  // from another tenant is indistinguishable from one that does not exist.
+  // `sprint_id` absent leaves the card where it is; explicit null is the backlog.
+  const targetSprintId =
+    parsed.data.sprint_id === undefined ? card.sprintId : parsed.data.sprint_id;
+
+  if (targetSprintId !== null) {
+    const [targetSprint] = await db
+      .select({ id: sprints.id })
+      .from(sprints)
+      .where(
+        and(
+          eq(sprints.id, targetSprintId),
+          eq(sprints.workspaceId, workspaceId),
+        ),
+      )
+      .limit(1);
+
+    if (!targetSprint) return notFound();
+  }
+
+  const scope: OrderScope =
+    targetSprintId === null
+      ? { kind: "backlog", workspaceId }
+      : { kind: "board", workspaceId, columnId, sprintId: targetSprintId };
+
+  // Neighbours must already live in the destination scope. A card id from
+  // another tenant is indistinguishable from one that does not exist.
   const neighborIds = [prev_card_id, next_card_id].filter(
     (value): value is number => typeof value === "number",
   );
@@ -91,41 +121,30 @@ export async function POST(
     neighborRows = await db
       .select({ id: cards.id, position: cards.position })
       .from(cards)
-      .where(
-        and(
-          inArray(cards.id, neighborIds),
-          eq(cards.workspaceId, workspaceId),
-          eq(cards.columnId, columnId),
-        ),
-      );
+      .where(and(inArray(cards.id, neighborIds), scopeWhere(scope)));
 
     if (neighborRows.length !== neighborIds.length) return notFound();
   }
 
   const positionOf = (
     rows: { id: number; position: string }[],
-    id: number | null | undefined,
-  ) => (id ? (rows.find((row) => row.id === id)?.position ?? null) : null);
+    value: number | null | undefined,
+  ) => (value ? (rows.find((row) => row.id === value)?.position ?? null) : null);
 
   let prev = positionOf(neighborRows, prev_card_id);
   const next = positionOf(neighborRows, next_card_id);
 
-  // No neighbours given: append to the end of the target column. Deterministic,
+  // No neighbours given: append to the end of the destination. Deterministic,
   // and avoids minting a bare "a0" that collides with whatever is already there.
   if (prev === null && next === null) {
-    const order = await readColumnOrder(workspaceId, columnId);
+    const order = await readOrder(scope);
     prev = order.filter((row) => row.id !== movingId).at(-1)?.position ?? null;
   }
 
-  const result = await computePosition(
-    workspaceId,
-    columnId,
-    { prev, next },
-    (fresh) => ({
-      prev: positionOf(fresh, prev_card_id),
-      next: positionOf(fresh, next_card_id),
-    }),
-  );
+  const result = await computePosition(scope, { prev, next }, (fresh) => ({
+    prev: positionOf(fresh, prev_card_id),
+    next: positionOf(fresh, next_card_id),
+  }));
 
   if (!result.ok) return badRequest(result.error);
 
@@ -133,6 +152,7 @@ export async function POST(
     .update(cards)
     .set({
       columnId,
+      sprintId: targetSprintId,
       position: result.position,
       updatedAt: new Date(),
     })
@@ -140,8 +160,8 @@ export async function POST(
     .returning({
       id: cards.id,
       columnId: cards.columnId,
-      position: cards.position,
       sprintId: cards.sprintId,
+      position: cards.position,
     });
 
   if (!updated) return notFound();
@@ -150,7 +170,7 @@ export async function POST(
   let rebalanced = result.rebalanced;
   let position = updated.position;
   if (position.length > MAX_POSITION_LENGTH) {
-    const fresh = await rebalanceColumn(workspaceId, columnId);
+    const fresh = await rebalance(scope);
     position = fresh.find((row) => row.id === movingId)?.position ?? position;
     rebalanced = true;
   }

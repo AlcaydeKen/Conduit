@@ -13,7 +13,8 @@
     "db:studio": "drizzle-kit studio",
     "db:seed": "tsx --env-file=.env.local src/db/seed.ts",
     "verify:ordering": "tsx --env-file=.env.local scripts/verify-ordering.ts",
-    "verify:api": "tsx --env-file=.env.local scripts/verify-api.ts"
+    "verify:api": "tsx --env-file=.env.local scripts/verify-api.ts",
+    "verify:sprints": "tsx --env-file=.env.local scripts/verify-sprints.ts"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.10.0",
