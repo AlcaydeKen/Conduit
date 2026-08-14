@@ -7,7 +7,7 @@ import { generateKeyBetween } from "fractional-indexing";
 import { db } from "@/db";
 import { cards, columns, labels, sprints, workspaces } from "@/db/schema";
 
-const WORKSPACE_SLUG = "koban";
+const WORKSPACE_SLUG = "conduit";
 
 const DEFAULT_COLUMNS = [
   { name: "To Do", wipLimit: null },
@@ -75,7 +75,7 @@ async function main() {
   if (!workspace) {
     [workspace] = await db
       .insert(workspaces)
-      .values({ name: "Koban", slug: WORKSPACE_SLUG })
+      .values({ name: "Conduit", slug: WORKSPACE_SLUG })
       .returning();
     console.log(`  workspace #${workspace.id} (${workspace.slug})`);
   } else {

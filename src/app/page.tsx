@@ -92,7 +92,7 @@ function Shell({
   return (
     <main className="mx-auto max-w-7xl space-y-6 p-6">
       <header className="flex items-center justify-between gap-4 border-b pb-4">
-        <h1 className="text-xl font-semibold tracking-tight">Koban</h1>
+        <h1 className="text-xl font-semibold tracking-tight">Conduit</h1>
         <div className="flex items-center gap-3">
           <span className="text-muted-foreground text-sm">{userName}</span>
           <form

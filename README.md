@@ -1,4 +1,4 @@
-# Koban
+# Conduit
 
 Self-hosted multi-workspace Kanban board with sprints, an async AI queue, and an
 MCP server. See `SPEC.md` for the architecture and `PLAN.md` for the roadmap.

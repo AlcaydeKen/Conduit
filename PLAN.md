@@ -1,4 +1,4 @@
-# Implementation Roadmap: Koban
+# Implementation Roadmap: Conduit
 
 > **Current Phase:** Phase 3: Backlog & Sprint Management
 > **Status:** Phases 1–2 complete and verified against live Neon, GitHub OAuth, and a browser.
