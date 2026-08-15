@@ -251,6 +251,52 @@ async function main() {
       afterSmuggle[0]?.columnId === targetColumn.id,
     { status: smuggled.status, row: afterSmuggle[0] },
   );
+  check(
+    "and refuses the request rather than reporting success",
+    smuggled.status === 400,
+    smuggled.status,
+  );
+
+  /*
+   * A partial PATCH must leave everything it does not name alone. This is the
+   * whole reason the edit form sends only changed fields: a full-form submit
+   * built from a snapshot silently reverts whatever someone else changed while
+   * the drawer sat open, and `card.update` logs field *names* only, so the old
+   * value survives nowhere.
+   */
+  const before = await db
+    .select({ title: cards.title, points: cards.points, priority: cards.priority })
+    .from(cards)
+    .where(eq(cards.id, newCard.id));
+  const partial = await authed(`/api/v1/cards/${newCard.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ points: 8 }),
+  });
+  const after = await db
+    .select({ title: cards.title, points: cards.points, priority: cards.priority })
+    .from(cards)
+    .where(eq(cards.id, newCard.id));
+  check(
+    "a one-field PATCH changes that field",
+    partial.status === 200 && after[0]?.points === 8,
+    { status: partial.status, points: after[0]?.points },
+  );
+  check(
+    "and touches nothing it did not name",
+    after[0]?.title === before[0]?.title &&
+      after[0]?.priority === before[0]?.priority,
+    { before: before[0], after: after[0] },
+  );
+
+  const empty = await authed(`/api/v1/cards/${newCard.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({}),
+  });
+  check(
+    "an empty PATCH is 400, not a no-op write",
+    empty.status === 400,
+    empty.status,
+  );
 
   // 5c. The drawer's history.
   const cardHistory = await authed(

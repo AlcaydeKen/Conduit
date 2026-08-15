@@ -44,6 +44,27 @@ export function CardEditForm({
   const [error, setError] = useState<string | null>(null);
 
   /*
+   * The values this edit started from, captured once.
+   *
+   * Deliberately a snapshot rather than a live read of `card`: the board polls
+   * every five seconds, so `card` changes underneath an open form whenever
+   * anyone else touches the row — another browser, or Claude Code over MCP.
+   * Diffing against the live prop would make a teammate's edit look like your
+   * own unchanged value and quietly stop being sent.
+   *
+   * The form does not remount while it is open (same element, same position),
+   * so this stays fixed for the whole edit session, which is what makes it
+   * meaningful.
+   */
+  const [initial] = useState(() => ({
+    title: card.title,
+    description: card.description ?? "",
+    priority: card.priority,
+    points: card.points === null ? "" : String(card.points),
+    assignee: card.assignee?.id ?? UNASSIGNED_VALUE,
+  }));
+
+  /*
    * The roster may not contain the current assignee — someone can be removed
    * from `workspace_members` while still holding cards, since `assignee_id` is
    * `ON DELETE SET NULL` on the *user*, not on the membership. Without this the
@@ -62,6 +83,44 @@ export function CardEditForm({
       return;
     }
 
+    /*
+     * Only what actually changed.
+     *
+     * Sending the whole form makes every save a blind overwrite of the entire
+     * row: edit the points after a teammate has renamed the card, and their
+     * title goes back to what it said when you opened the drawer. Nothing
+     * detects it and nothing can recover it — `card.update` records field
+     * *names* only, so both edits log identically and the old value exists
+     * nowhere.
+     *
+     * This is not concurrency control and does not pretend to be. Two people
+     * editing the same field still race, and the last writer wins. It removes
+     * the case where you clobber a field you never touched, which is the one
+     * that happens by accident.
+     *
+     * It also makes the audit log honest: the payload is `Object.keys(body)`,
+     * so a full-form submit reported all five fields as edited every time.
+     */
+    const patch: Record<string, unknown> = {};
+    if (trimmed !== initial.title) patch.title = trimmed;
+    if (description !== initial.description) {
+      patch.description = description.trim() === "" ? null : description;
+    }
+    if (priority !== initial.priority) patch.priority = priority;
+    if (points !== initial.points) {
+      patch.points = points.trim() === "" ? null : Number(points);
+    }
+    if (assignee !== initial.assignee) {
+      patch.assignee_id = assignee === UNASSIGNED_VALUE ? null : assignee;
+    }
+
+    // Nothing to send is not an error, and must not become a write: an empty
+    // PATCH would still bump `updated_at` and log an edit that did not happen.
+    if (Object.keys(patch).length === 0) {
+      onCancel();
+      return;
+    }
+
     setSaving(true);
     setError(null);
     try {
@@ -73,13 +132,7 @@ export function CardEditForm({
          * design — moving a card is the move endpoint's job, so ordering has
          * exactly one entry point and one place that generates keys.
          */
-        body: JSON.stringify({
-          title: trimmed,
-          description: description.trim() === "" ? null : description,
-          priority,
-          points: points.trim() === "" ? null : Number(points),
-          assignee_id: assignee === UNASSIGNED_VALUE ? null : assignee,
-        }),
+        body: JSON.stringify(patch),
       });
       if (!response.ok) throw new Error(`patch_failed_${response.status}`);
       onSaved();

@@ -510,6 +510,26 @@ card to their own board without minting an API key.
   destroys the same work more politely, and filtering claims client-side cannot help, because
   by the time a claim returns the job has been handed out and its attempt counter bumped.
 
+### Round 1b — partial edits
+
+- [x] The edit form sends only the fields that changed, diffed against a snapshot taken when
+      the form opened rather than against the live `card` prop — the board polls every five
+      seconds, so the prop moves under an open form whenever anyone else touches the row.
+- [x] `PATCH` refuses a body naming no editable field. Every field is optional, so `{}` and
+      `{"position": "zzz"}` both parsed and reached the UPDATE as `SET updated_at = now()`:
+      a write that changed nothing, bumped the column any future concurrency check would key
+      on, and appended an empty `card.update` to the card's history.
+
+This is not concurrency control. Two people editing the same field still race and the last
+writer wins. What it removes is clobbering a field you never touched — the case that happens
+by accident. Real optimistic locking is harder here than usual because `POST /cards/:id/move`
+also writes `updated_at`, so an unrelated drag would 409 an edit; a version token would have
+to be scoped to editable fields, which is most of this diff again.
+
+It also makes the audit log honest as a side effect: `card.update` records `Object.keys(body)`
+and nothing else — no before, no after — so a full-form submit reported all five fields as
+edited every time, and a clobbered title left no trace of its old value anywhere.
+
 ### Not done, in priority order
 
 - Labels are still half-built: schema, join table, board payload and both render paths exist,

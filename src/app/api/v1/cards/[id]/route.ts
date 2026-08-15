@@ -119,6 +119,22 @@ export async function PATCH(
     patch.assigneeId = body.assignee_id ?? null;
   }
 
+  /*
+   * A body with no editable field is refused rather than written.
+   *
+   * Every field here is optional, so `{}` and `{"position": "zzz"}` both parse
+   * cleanly and would otherwise reach the UPDATE as `SET updated_at = now()` —
+   * a write that changes nothing, bumps the column any future optimistic
+   * concurrency check would key on, and appends `card.update` with an empty
+   * field list to a card's history. Three costs for an operation the caller did
+   * not ask for.
+   *
+   * 400 rather than 200: a request naming only fields this route refuses is a
+   * caller misunderstanding the contract, and answering "fine" teaches them the
+   * write went through.
+   */
+  if (Object.keys(patch).length === 1) return badRequest("no_editable_fields");
+
   const [updated] = await db
     .update(cards)
     .set(patch)
