@@ -21,16 +21,9 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.CONDUIT_API_URL }}/api/v1/ai/jobs/claim",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Authorization",
-              "value": "=Bearer {{ $env.CONDUIT_CLAIM_KEY }}"
-            }
-          ]
-        },
+        "url": "http://host.docker.internal:3000/api/v1/ai/jobs/claim",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
         "options": {
           "response": {
             "response": {
@@ -44,7 +37,15 @@
       "name": "Claim a job",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [-160, 0]
+      "position": [-160, 0],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ON_IMPORT",
+          "name": "Conduit claim key"
+        }
+      },
+      "notes": "Header Auth credential: name Authorization, value \"Bearer cdt_...\" from pnpm claim-key:mint. This is the service key, not a workspace key — every other route refuses it.",
+      "notesInFlow": false
     },
     {
       "parameters": {
@@ -103,12 +104,14 @@
       "name": "Run Ollama",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [280, -80]
+      "position": [280, -80],
+      "notes": "8 min timeout, deliberately under the server's 10 min STALE_AFTER_MINUTES. Raise one and you must raise the other.",
+      "notesInFlow": false
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.CONDUIT_API_URL }}/api/v1/ai/jobs/{{ $('Claim a job').item.json.body.job.id }}/result",
+        "url": "=http://host.docker.internal:3000/api/v1/ai/jobs/{{ $('Claim a job').item.json.body.job.id }}/result",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -127,7 +130,9 @@
       "name": "Report result",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [500, -80]
+      "position": [500, -80],
+      "notes": "No credential here on purpose. This authenticates on the 15 min HMAC token the claim returned — the API key is refused at this route even when valid, so a leaked token is worth one job.",
+      "notesInFlow": false
     }
   ],
   "connections": {

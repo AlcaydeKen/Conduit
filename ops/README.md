@@ -18,72 +18,76 @@ see it:
 docker exec <n8n-container> curl -s http://host.docker.internal:11434/api/tags
 ```
 
-## 2. The AI job runner workflow
+## 2. Minting the claim key
 
-Import `n8n-ai-job-runner.json`, then set two environment variables on the n8n
-container:
+Do this before importing the workflow — the credential has to exist first.
 
-| Variable | Value |
-| --- | --- |
-| `CONDUIT_API_URL` | Base URL of the app, no trailing slash |
-| `CONDUIT_CLAIM_KEY` | The **service** key — see below |
+```bash
+pnpm claim-key:mint
+```
 
-`CONDUIT_CLAIM_KEY` is *not* the MCP server's `KANBAN_API_KEY`. That one is a
+It prints the plaintext once. That value goes into n8n and nowhere else; the
+column holds a SHA-256 digest, so it is not recoverable afterwards. If a live
+claim key already exists the script refuses rather than adding a second one —
+two live keys means revoking the leaked one does not end the leak unless you
+know which leaked. Pass `--revoke-existing` to rotate.
+
+There is deliberately no UI for this. Settings mints workspace keys; the claim
+key is the one credential in the system whose blast radius is not
+tenant-bounded, so it is created from a terminal by someone who meant to.
+
+What the script writes, and why each part matters:
+
+| Column | Value | Why |
+| --- | --- | --- |
+| `workspace_id` | `null` | This *is* the service-key definition. `resolveKeyActor` excludes it with `IS NOT NULL`, `resolveClaimKey` requires it with `IS NULL`. |
+| `scopes` | `["ai:claim"]` | Required, not decorative. A workspace-less key without it authenticates as nothing. |
+| `created_by` | `null` | The membership predicate that expires workspace keys does not apply — there is no member behind this one. |
+
+The claim key is *not* the MCP server's `KANBAN_API_KEY`. That one is a
 workspace key and every route here refuses it; this one is workspace-less and is
-refused by every route *except* the claim. They are deliberately different
-credentials with different blast radii, so do not reuse one for the other.
+refused by every route *except* the claim. Different blast radii, so do not
+reuse one for the other.
 
-Run it manually once before enabling the schedule.
+## 3. The AI job runner workflow
 
-### Three things to check on first import
+Create the credential first, then import — n8n links them by name.
 
-None of these can be settled from this repo — they need your n8n instance.
+1. **Credentials → New → Header Auth**, named exactly `Conduit claim key`.
+   - Name: `Authorization`
+   - Value: `Bearer cdt_...` (the whole line the mint script printed)
+2. **Import `n8n-ai-job-runner.json`.** Open *Claim a job* and confirm the
+   credential field shows `Conduit claim key`. If it is empty, pick it from the
+   dropdown — the id in the JSON is a placeholder and only the name matches.
+3. **Run it manually once** before enabling the schedule.
 
-1. **`$env` in expressions is blocked by default.** Both HTTP nodes read
-   `$env.CONDUIT_API_URL` and `$env.CONDUIT_CLAIM_KEY`. n8n gates process-env
-   access from expressions, so on a default install those resolve to nothing and
-   the claim silently posts to `/api/v1/ai/jobs/claim` with no host and no
-   credential. Either set `N8N_BLOCK_ENV_ACCESS_IN_NODE=false`, or replace the
-   Authorization header with a Header Auth credential and hardcode the base URL.
-   Check this first — it is the most likely reason a fresh import does nothing.
-2. **`typeVersion` values.** The nodes are pinned at `scheduleTrigger@1.2`,
-   `httpRequest@4.2`, `if@2.2` and `noOp@1`. These have not been imported into a
-   live instance. If your n8n is newer it will usually load them and offer an
-   upgrade; if a node loads with empty parameters, the version is the reason.
-3. **The Ollama timeout is deliberately below the sweep threshold.** It is
+The base URL is hardcoded to `http://host.docker.internal:3000` in the two
+Conduit nodes. Change both if the app is not on the host's port 3000.
+
+### Why a credential rather than `$env`
+
+An earlier version read `$env.CONDUIT_API_URL` and `$env.CONDUIT_CLAIM_KEY`.
+That requires `N8N_BLOCK_ENV_ACCESS_IN_NODE=false`, which unblocks the *whole*
+process environment for *every* workflow expression on the instance — and this
+n8n is shared with unrelated projects. The credential is encrypted at rest in
+n8n's own store and masked in execution logs; an env var is neither, and sits in
+plaintext in `docker inspect`.
+
+### Two things left to check on your instance
+
+1. **`typeVersion` values.** The nodes are pinned at `scheduleTrigger@1.2`,
+   `httpRequest@4.2`, `if@2.2` and `noOp@1`. If a node loads with empty
+   parameters after import, the version is the reason — n8n usually loads older
+   versions fine and offers an upgrade.
+2. **The Ollama timeout is deliberately below the sweep threshold.** It is
    480000 ms (8 min) against a 10-minute `STALE_AFTER_MINUTES` on the server. A
    run that outlives the sweep gets its job handed to another runner, and its
    result is then refused with `job_reclaimed` — correct, but wasted compute. If
    you raise the timeout, raise the server's sweep threshold with it.
 
-### Minting the claim key
-
-There is deliberately no UI for this. Settings mints workspace keys; the claim
-key is the one credential in the system whose blast radius is not
-tenant-bounded, and it should be created consciously rather than from a form
-someone can reach by accident:
-
-Generate the pair first, keep the plaintext only in n8n:
-
-```bash
-node -e "const c=require('crypto');const p='cdt_'+c.randomBytes(32).toString('base64url');console.log('plaintext:',p);console.log('sha256   :',c.createHash('sha256').update(p).digest('hex'))"
-```
-
-```sql
--- key_hash is sha256(plaintext), hex. Everything else takes its default:
--- revoked false, created_at now(), created_by and last_used_at null.
-insert into api_keys (workspace_id, label, key_hash, scopes)
-values (null, 'n8n claim key', '<sha256-hex>', '["ai:claim"]'::jsonb);
-```
-
-`workspace_id IS NULL` is what makes it a service key, and `["ai:claim"]` is now
-required rather than decorative — the claim endpoint checks it, so a
-workspace-less key minted without that scope is refused. Verified: a key inserted
-by exactly this statement claims successfully and is refused with 401 on
-`/api/v1/board`.
-
-`workspace_id IS NULL` is what makes it a service key — and what makes every
-other endpoint refuse it.
+The claim endpoint also enforces a 5-second floor between polls per key
+(`MIN_POLL_INTERVAL_SECONDS`), which the 1-minute schedule is comfortably
+inside. Two runners sharing one key is what that floor exists to catch.
 
 ## What the runner is trusted with, and what it is not
 
