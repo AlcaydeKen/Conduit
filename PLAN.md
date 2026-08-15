@@ -157,19 +157,21 @@
   the notice becomes necessary.
 
 ### Carried into Phase 4
-- **`DndContext` renders no accessibility DOM on the board page.** Every card carries
-  `aria-describedby="board"`, and no element with that id exists, so screen readers get no
-  drag instructions. Measured, not inferred: no `display:none` div, no `[aria-live]`, no
-  `[role="status"]`, and the instruction string is absent from `innerHTML`.
-  Not dnd-kit's fault and not caused by the `id` pin — a throwaway route with a bare
-  `DndContext` renders `#DndDescribedBy-0` plus `#DndLiveRegion-0` correctly, and still
-  does after being given the board's exact `id` / `sensors` / `collisionDetection` /
-  handler / `DragOverlay` configuration, where the target resolves as `<div id="board">`.
-  So the suppression comes from something in the board page's composition — the `Suspense`
-  boundary, SWR, or the card panel — and `Accessibility` bails at its only `return null`,
-  meaning `mounted` never flips. Do not paper over this by hand-rendering a
-  `<div id="board">`: dnd-kit renders its own element with that exact id, so the two would
-  collide the moment the underlying cause is fixed.
+- **Correction: the accessibility DOM was never missing.** An earlier note here recorded
+  that `DndContext` rendered no hidden ARIA elements on the board page — no `display:none`
+  instructions div, no live region — and carried it forward for three phases. It was wrong.
+  Re-measured on a clean dev server, `#board` is present and holds the screen-reader
+  instructions, `aria-describedby` resolves to it, and `#DndLiveRegion-0` is there with
+  `role="status"`. The original readings were taken while `pnpm build` was clobbering
+  `.next` underneath a running `pnpm dev`, which is the same root cause as the phantom
+  500s in Phase 4 — diagnosed correctly there and not applied here. A measurement taken
+  against a half-replaced bundle is not evidence, and "verified in the browser" is worth
+  nothing if the browser was served stale chunks.
+- Drag announcements are explicit. dnd-kit's defaults name things by id — "Draggable item
+  3 was moved over droppable area column:2" — which is precisely the information a screen
+  reader user lacks. Ours say the card's title and the column's name. There is deliberately
+  no hand-rendered `<div id="board">`: dnd-kit renders its own with that id, and a second
+  would point one `aria-describedby` at two nodes.
 
 ---
 
@@ -313,7 +315,6 @@
   removing an address does not end a live JWT and `updateAge` re-issues on activity. Now
   more visible than it was: a person removed from the allowlist also keeps every API key
   they created, since a key's validity is independent of its creator's.
-- `DndContext` renders no accessibility DOM on the board page — see the Phase 3 note.
 
 ---
 

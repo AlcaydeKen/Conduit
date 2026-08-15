@@ -151,6 +151,67 @@ export function Board({
       0,
     ) + (viewingBacklog ? 0 : shownBacklog.length);
 
+  /**
+   * dnd-kit's default announcements name things by id — "Draggable item 3 was
+   * moved over droppable area column:2" — which is exactly the information a
+   * screen reader user does not have. These say the card's title and the
+   * column's name instead.
+   *
+   * The hidden elements these feed were always mounting; a period of stale dev
+   * bundles made it look otherwise. There is deliberately no hand-rendered
+   * `<div id="board">` here: dnd-kit renders its own with that id, and a second
+   * would be a duplicate id pointing the same `aria-describedby` at two nodes.
+   */
+  const announcements = useMemo(() => {
+    const titleOf = (id: string | number) =>
+      allCards.find((card) => String(card.id) === String(id))?.title ??
+      `card ${id}`;
+
+    const destinationOf = (id: string | number | undefined) => {
+      if (id === undefined) return null;
+      const raw = String(id);
+      if (raw === BACKLOG_DROPPABLE_ID) return "the backlog";
+      const columnId = raw.startsWith("column:")
+        ? Number(raw.slice("column:".length))
+        : allCards.find((card) => String(card.id) === raw)?.column_id;
+      const column = board.columns.find((item) => item.id === columnId);
+      return column ? column.name : null;
+    };
+
+    return {
+      onDragStart({ active }: { active: { id: string | number } }) {
+        return `Picked up ${titleOf(active.id)}.`;
+      },
+      onDragOver({
+        active,
+        over,
+      }: {
+        active: { id: string | number };
+        over: { id: string | number } | null;
+      }) {
+        const where = destinationOf(over?.id);
+        return where
+          ? `${titleOf(active.id)} is over ${where}.`
+          : `${titleOf(active.id)} is not over a drop target.`;
+      },
+      onDragEnd({
+        active,
+        over,
+      }: {
+        active: { id: string | number };
+        over: { id: string | number } | null;
+      }) {
+        const where = destinationOf(over?.id);
+        return where
+          ? `${titleOf(active.id)} was dropped into ${where}.`
+          : `${titleOf(active.id)} was dropped where it started.`;
+      },
+      onDragCancel({ active }: { active: { id: string | number } }) {
+        return `Cancelled. ${titleOf(active.id)} stayed where it was.`;
+      },
+    };
+  }, [allCards, board.columns]);
+
   const sensors = useSensors(
     // A small threshold so a plain click still opens the detail panel instead
     // of being swallowed as a drag.
@@ -378,6 +439,7 @@ export function Board({
         // out of step with the client's and fails hydration. Pre-existing, and
         // only visible in dev, but a real mismatch either way.
         id="board"
+        accessibility={{ announcements }}
         sensors={sensors}
         collisionDetection={closestCorners}
         onDragStart={(event: DragStartEvent) =>
