@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Loader2, Sparkles } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import useSWR from "swr";
@@ -25,6 +26,33 @@ const fetcher = async (url: string) => {
   return response.json() as Promise<{ comments: CardComment[] }>;
 };
 
+type AiJob = {
+  id: number;
+  kind: string;
+  status: "pending" | "claimed" | "done" | "failed";
+  result: unknown;
+  error: string | null;
+  attempts: number;
+};
+
+const jobFetcher = async (url: string) => {
+  const response = await fetch(url, { headers: { accept: "application/json" } });
+  if (!response.ok) throw new Error(`job_fetch_failed_${response.status}`);
+  return response.json() as Promise<{ job: AiJob | null }>;
+};
+
+const IN_FLIGHT = new Set(["pending", "claimed"]);
+
+/** The runner returns free-form JSON; pull out the text without assuming a shape. */
+function draftTextOf(result: unknown): string | null {
+  if (typeof result === "string") return result;
+  if (result && typeof result === "object") {
+    const text = (result as { text?: unknown }).text;
+    if (typeof text === "string") return text;
+  }
+  return null;
+}
+
 /**
  * react-markdown escapes raw HTML unless `rehype-raw` is added. It deliberately
  * is not — comment bodies are user input rendered to other users.
@@ -41,19 +69,81 @@ export function CardPanel({
   cardId,
   card,
   onClose,
+  onCardChanged,
 }: {
   cardId: number | null;
   card: BoardCard | null;
   onClose: () => void;
+  /** Lets the board re-read once a job finishes. */
+  onCardChanged?: () => void;
 }) {
   const [draft, setDraft] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [queueing, setQueueing] = useState(false);
+  const [jobError, setJobError] = useState<string | null>(null);
 
   const { data, mutate } = useSWR(
     cardId ? `/api/v1/cards/${cardId}/comments` : null,
     fetcher,
   );
+
+  /**
+   * A flat interval, running whenever the drawer is open.
+   *
+   * Conditional versions — `refreshInterval` as a function of the latest data,
+   * or the same number driven from state — are tempting, since a settled job
+   * never changes again. Both are harder to reason about than they look: the
+   * function form is evaluated when SWR arms its timer, and at mount there is
+   * usually no job at all. A flat interval matches what the board already does
+   * and has one behaviour rather than two.
+   *
+   * The cost is one small request every three seconds while a drawer is open —
+   * one drawer at a time, and only while someone is looking at it. Closing the
+   * drawer nulls the key, which is what actually stops it. As on the board,
+   * SWR suspends the interval entirely while the tab is hidden.
+   */
+  const { data: jobData, mutate: mutateJob } = useSWR(
+    cardId ? `/api/v1/ai/jobs?card=${cardId}` : null,
+    jobFetcher,
+    {
+      refreshInterval: 3000,
+      onSuccess: (latest) => {
+        if (latest.job && !IN_FLIGHT.has(latest.job.status)) onCardChanged?.();
+      },
+    },
+  );
+
+  const job = jobData?.job ?? null;
+  const jobRunning = job !== null && IN_FLIGHT.has(job.status);
+  const draftText = job?.status === "done" ? draftTextOf(job.result) : null;
+
+  async function queueDraft() {
+    if (!cardId) return;
+    setQueueing(true);
+    setJobError(null);
+    try {
+      const response = await fetch("/api/v1/ai/jobs", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ card_id: cardId, kind: "draft_card" }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        setJobError(
+          payload?.error === "job_already_queued"
+            ? "A draft is already queued for this card."
+            : "Could not queue that draft.",
+        );
+        return;
+      }
+      await mutateJob();
+    } catch {
+      setJobError("Could not queue that draft.");
+    } finally {
+      setQueueing(false);
+    }
+  }
 
   async function submitComment() {
     if (!cardId || draft.trim().length === 0) return;
@@ -108,6 +198,62 @@ export function CardPanel({
           ) : (
             <p className="text-muted-foreground text-sm">No description yet.</p>
           )}
+
+          <section className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={queueDraft}
+                disabled={queueing || jobRunning}
+              >
+                <Sparkles className="size-3.5" />
+                {queueing ? "Queueing…" : "Generate AI draft"}
+              </Button>
+
+              {jobRunning ? (
+                <Badge variant="secondary" className="gap-1.5 font-normal">
+                  <Loader2 className="size-3 animate-spin" />
+                  {/* "queued" and "running" are different waits, and the
+                      difference is the first thing anyone asks about. */}
+                  {job?.status === "pending" ? "Queued" : "Drafting"}
+                </Badge>
+              ) : null}
+
+              {job?.status === "failed" ? (
+                <Badge
+                  variant="outline"
+                  className="text-destructive border-destructive/40 font-normal"
+                >
+                  Draft failed
+                </Badge>
+              ) : null}
+            </div>
+
+            {jobRunning ? (
+              <p className="text-muted-foreground text-xs">
+                This runs on a worker that polls once a minute, so it will not
+                be instant. You can close this panel and come back.
+              </p>
+            ) : null}
+
+            {jobError ? (
+              <p className="text-destructive text-xs">{jobError}</p>
+            ) : null}
+
+            {job?.status === "failed" && job.error ? (
+              <p className="text-muted-foreground text-xs">{job.error}</p>
+            ) : null}
+
+            {draftText ? (
+              <div className="bg-muted/40 space-y-1 rounded-md border p-3">
+                <p className="text-muted-foreground text-xs font-medium">
+                  AI draft — not applied to the card
+                </p>
+                <Prose>{draftText}</Prose>
+              </div>
+            ) : null}
+          </section>
 
           <Separator />
 

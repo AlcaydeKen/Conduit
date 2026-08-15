@@ -81,14 +81,14 @@ async function main() {
         {
           workspaceId: workspace.id,
           cardId: card?.id ?? null,
-          kind: "draft_card",
+          kind: "estimate_points",
           status: "pending",
           input: { marker: MARKER, n: 1 },
         },
         {
           workspaceId: workspace.id,
           cardId: card?.id ?? null,
-          kind: "suggest_labels",
+          kind: "split_epic",
           status: "pending",
           input: { marker: MARKER, n: 2 },
         },
@@ -96,7 +96,66 @@ async function main() {
       .returning({ id: aiJobs.id });
     const queuedIds = queued.map((row) => row.id);
 
-    console.log("1. only the service key may claim");
+    console.log("0. enqueueing from the app side");
+    if (card) {
+      const enqueue = await post("/api/v1/ai/jobs", scoped.plaintext, {
+        card_id: card.id,
+        kind: "draft_card",
+        input: { marker: MARKER },
+      });
+      check("POST /ai/jobs is 200", enqueue.status === 200, enqueue.status);
+      const enqueued = (await enqueue.json()).job;
+      check("it comes back pending", enqueued?.status === "pending", enqueued);
+
+      const duplicate = await post("/api/v1/ai/jobs", scoped.plaintext, {
+        card_id: card.id,
+        kind: "draft_card",
+      });
+      check(
+        "a second draft for the same card is 409, not a duplicate run",
+        duplicate.status === 409,
+        duplicate.status,
+      );
+
+      const readBack = await fetch(
+        `${BASE_URL}/api/v1/ai/jobs?card=${card.id}`,
+        { headers: { authorization: `Bearer ${scoped.plaintext}` } },
+      );
+      check("GET /ai/jobs?card= is 200", readBack.status === 200, readBack.status);
+      check(
+        "and returns the job the drawer polls",
+        (await readBack.json()).job?.id === enqueued?.id,
+      );
+
+      const foreignCard = await post("/api/v1/ai/jobs", scoped.plaintext, {
+        card_id: 99999999,
+        kind: "draft_card",
+      });
+      check(
+        "queueing against an unknown card is 404",
+        foreignCard.status === 404,
+        foreignCard.status,
+      );
+
+      const badKind = await post("/api/v1/ai/jobs", scoped.plaintext, {
+        card_id: card.id,
+        kind: "draft_description",
+      });
+      check(
+        "an unknown kind is rejected rather than stored",
+        badKind.status === 400,
+        badKind.status,
+      );
+
+      // Leave the queue as the rest of the script expects.
+      await db
+        .delete(aiJobs)
+        .where(eq(aiJobs.id, enqueued.id as number));
+    } else {
+      console.log("  SKIP  no card in the workspace");
+    }
+
+    console.log("\n1. only the service key may claim");
     const anonymous = await post("/api/v1/ai/jobs/claim", null);
     check("no credential is 401", anonymous.status === 401, anonymous.status);
 

@@ -357,8 +357,20 @@
   typecheck — Drizzle's `sql` template is opaque to it.
 
 ### Carried into Phase 6 completion
-- Nothing in the UI enqueues an `ai_jobs` row yet, so the end-to-end check ("queue a draft
-  job in the UI") has no button to press. The queue is driven only by direct inserts and by
-  `verify:queue`.
+- The card drawer now has a "Generate AI draft" button, `POST /api/v1/ai/jobs` to enqueue,
+  and `GET /api/v1/ai/jobs?card=` for the drawer to poll. The workspace comes from the card,
+  proven in the same statement that loads it — never from the body — because that id is what
+  the result callback's signed token is later minted from. One open job per card and kind,
+  so a double-click cannot queue two runs of the same prompt.
+- A finished job is shown in the drawer, **not** written to the card. A model should not
+  silently overwrite a human's description; applying a draft should be a separate,
+  deliberate action.
+- **Verified in the browser:** the button enqueues, the badge shows "Queued", and the button
+  disables while a job is open. **Not verified in the browser:** the done-state rendering of
+  the draft. SWR suspends `refreshInterval` while `document.visibilityState === "hidden"`,
+  and an automation-driven tab is always hidden — the Phase 2 note applies here too, and
+  focus-dispatch does not work around it because focus revalidation is gated on visibility
+  as well. The API side is covered by `verify:queue`; the render path needs a human-driven
+  tab.
 - `ops/n8n-ai-job-runner.json` is written against current n8n node typeVersions and has not
   been imported into a live instance. Treat the first import as a review, not a paste.

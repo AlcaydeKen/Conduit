@@ -419,6 +419,7 @@ export function Board({
         cardId={openCardId}
         card={allCards.find((card) => card.id === openCardId) ?? null}
         onClose={() => setOpenCardId(null)}
+        onCardChanged={() => void mutate()}
       />
     </div>
   );
