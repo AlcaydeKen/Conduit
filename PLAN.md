@@ -1,7 +1,7 @@
 # Implementation Roadmap: Conduit
 
-> **Current Phase:** Phase 4: Machine API & Tenant Isolation
-> **Status:** Phases 1–3 complete.
+> **Current Phase:** Phase 5: MCP Server Implementation
+> **Status:** Phases 1–4 complete.
 > **Reference Spec:** See `SPEC.md` for schema, security rules, and endpoints.
 
 ---
@@ -173,12 +173,74 @@
 ---
 
 ## Phase 4: Machine API & Tenant Isolation
-- [ ] Build REST API endpoints under `/api/v1/*` (`/workspaces`, `/sprints`, `/board`, `/cards`, `/reports`).
-- [ ] Build API Key management UI in settings with hashed keys in `api_keys`.
-- [ ] Enforce Tenant Rule 1: Single query join up to workspace boundary.
-- [ ] Enforce Tenant Rule 2: Fail closed with `404 Not Found` (never 403) on cross-tenant requests.
-- [ ] Implement activity logging for machine and human actions.
-- [ ] **Verification:** Run cross-tenant `curl` checks (verify byte-identical 404 on invalid vs unauthorized IDs).
+- [x] Build REST API endpoints under `/api/v1/*` (`/workspaces`, `/sprints`, `/board`, `/cards`, `/reports`).
+      Added `GET|POST /cards`, `GET|PATCH /cards/:id`, `GET /reports/sprint/:id`, and `/keys`.
+- [x] Build API Key management UI in settings with hashed keys in `api_keys`.
+- [x] Enforce Tenant Rule 1: Single query join up to workspace boundary.
+- [x] Enforce Tenant Rule 2: Fail closed with `404 Not Found` (never 403) on cross-tenant requests.
+- [x] Implement activity logging for machine and human actions.
+- [x] **Verification:** Run cross-tenant checks (byte-identical 404 on invalid vs unauthorized ids).
+  - `pnpm verify:tenant` — 44 checks over HTTP. Stands up a second workspace with its own key,
+    then reaches for the first workspace's rows with it: every route 404s, every body is
+    byte-identical to a genuinely missing id, and nothing is written. Also covers the
+    revoked key, the unknown key, the service key, the `?workspace=` and body-`workspace_id`
+    hints, and that a Bearer key cannot reach key management.
+  - `verify:api`, `verify:sprints`, `verify:ordering`, `verify:filters` all still green.
+
+### Phase 4 notes
+- `Actor` is a union, and that is what made the migration safe. Widening it broke every
+  route that reached for `actor.userId` to prove tenancy — six compile errors that were
+  each a real hole, not a chore. They are now `loadCardForActor` / `loadSprintForActor`,
+  which carry the boundary in the primary statement for both credential kinds.
+- `resolveActor(request)` takes the request as a *required* argument. An optional one would
+  let a route silently lose Bearer support by forgetting to pass it. Server components use
+  `resolveSessionActor()`, which has nothing to forget.
+- A service-scoped key (`workspace_id IS NULL`) resolves to null, so every route built on
+  `resolveActor` refuses it. The Phase 6 claim endpoint will get its own resolver. The
+  exemption is opt-in rather than something each route has to remember to exclude, and the
+  predicate lives in the lookup query rather than in a check after it.
+- Key lookup is a single `UPDATE ... RETURNING` that authenticates and stamps `last_used_at`
+  at once, rather than a select followed by a write — one round trip instead of two on
+  every machine request.
+- Keys are stored as a plain SHA-256 digest. bcrypt and argon2 exist to slow down guessing
+  a *low-entropy* secret; this one is 256 bits from a CSPRNG, so a work factor would only
+  make every authenticated request cost the server CPU.
+- `/api/v1/keys` uses `resolveSessionActor`, so a Bearer token cannot list, mint, or revoke
+  keys. A machine credential able to issue further credentials turns one leaked key into
+  self-renewing access that revoking the original would not end.
+- `PATCH /cards/:id` deliberately refuses `column_id`, `sprint_id` and `position`. Moving is
+  `POST /cards/:id/move`, which takes neighbour intent; accepting a column on the patch
+  would be a second way to move a card, and the one that skips the ordering machinery.
+- Assignees are checked against `workspace_members` before a write. Without it a caller
+  could pin a card to any user id in the system, which both reveals whether that id exists
+  and puts a stranger's name on a tenant's board.
+- `q=` escapes `\`, `%` and `_` before going into `ILIKE`, so a search for "100%" is a
+  search for a literal "100%" and not for everything.
+- `logActivity` swallows its own failures. A move that succeeded but went unlogged is a gap
+  in history; a move rolled back because its log row failed is lost work.
+- `pnpm build` now writes to `.next-build` instead of `.next`. Building while `pnpm dev` was
+  running left the dev server serving half-replaced chunks, and every route returned a 500
+  that read like an application bug. It cost three separate debugging detours across
+  Phases 2–4 before being fixed at the source.
+- The `security-auditor` pass over all eleven routes and the shared guards found no
+  violation of the tenant rules: no fetch-then-check, no 403 anywhere in the API surface,
+  no `workspace_id` reaching a query from a body or query string without being re-derived
+  from the credential, and `q=` not injectable at either the SQL or the LIKE-wildcard level.
+  Two things it raised that are not violations:
+  - `api_keys.scopes` is written as `[]` and read by nothing. It is dead authorisation
+    surface: harmless today because it grants nothing, but it must either be enforced or
+    removed before scopes are described anywhere as a real restriction. Carried below.
+  - `GET /cards/:id` and the comments GET run a second read keyed on the card id after
+    `loadCardForActor` has already proven tenancy. That is enrichment on an id already
+    established as safe, not a second boundary — and no write depends on it.
+
+### Carried into Phase 5+
+- `api_keys.scopes` grants nothing and is checked nowhere. Enforce it or drop the column.
+- The `ALLOWED_EMAILS` allowlist is still only enforced in the `signIn` callback, so
+  removing an address does not end a live JWT and `updateAge` re-issues on activity. Now
+  more visible than it was: a person removed from the allowlist also keeps every API key
+  they created, since a key's validity is independent of its creator's.
+- `DndContext` renders no accessibility DOM on the board page — see the Phase 3 note.
 
 ---
 

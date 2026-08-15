@@ -2,9 +2,14 @@ import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 
 import { db } from "@/db";
-import { cards, columns, sprints, workspaceMembers } from "@/db/schema";
+import { cards, columns, sprints } from "@/db/schema";
 import { badRequest, notFound, ok, unauthorized } from "@/lib/api/response";
-import { parseIntParam, resolveActor } from "@/lib/api/guards";
+import { logActivity } from "@/lib/api/activity";
+import {
+  loadCardForActor,
+  parseIntParam,
+  resolveActor,
+} from "@/lib/api/guards";
 import {
   MAX_POSITION_LENGTH,
   computePosition,
@@ -36,7 +41,7 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
-  const actor = await resolveActor();
+  const actor = await resolveActor(request);
   if (!actor) return unauthorized();
 
   const { id } = await context.params;
@@ -56,25 +61,9 @@ export async function POST(
     return badRequest("invalid_neighbors");
   }
 
-  // Card lookup and membership proof in one statement. The workspace comes from
-  // the row the caller provably has access to, never from the request.
-  const [card] = await db
-    .select({
-      id: cards.id,
-      workspaceId: cards.workspaceId,
-      sprintId: cards.sprintId,
-    })
-    .from(cards)
-    .innerJoin(
-      workspaceMembers,
-      and(
-        eq(workspaceMembers.workspaceId, cards.workspaceId),
-        eq(workspaceMembers.userId, actor.userId),
-      ),
-    )
-    .where(eq(cards.id, movingId))
-    .limit(1);
-
+  // Card lookup and tenant proof in one statement. The workspace comes from the
+  // row the caller provably has access to, never from the request.
+  const card = await loadCardForActor(actor, movingId);
   if (!card) return notFound();
   const workspaceId = card.workspaceId;
 
@@ -174,6 +163,20 @@ export async function POST(
     position = fresh.find((row) => row.id === movingId)?.position ?? position;
     rebalanced = true;
   }
+
+  await logActivity({
+    workspaceId,
+    cardId: movingId,
+    actor,
+    action: "card.move",
+    payload: {
+      from_column_id: card.columnId,
+      to_column_id: updated.columnId,
+      from_sprint_id: card.sprintId,
+      to_sprint_id: updated.sprintId,
+      rebalanced,
+    },
+  });
 
   return ok({
     card: {

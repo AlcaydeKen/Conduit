@@ -3,8 +3,13 @@ import { generateNKeysBetween } from "fractional-indexing";
 import { z } from "zod";
 
 import { db } from "@/db";
-import { cards, columns, sprints, workspaceMembers } from "@/db/schema";
-import { parseIntParam, resolveActor } from "@/lib/api/guards";
+import { cards, columns, sprints } from "@/db/schema";
+import { logActivity } from "@/lib/api/activity";
+import {
+  loadSprintForActor,
+  parseIntParam,
+  resolveActor,
+} from "@/lib/api/guards";
 import { badRequest, notFound, ok, unauthorized } from "@/lib/api/response";
 import { readOrder, type OrderScope } from "@/lib/ordering";
 
@@ -19,7 +24,7 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
-  const actor = await resolveActor();
+  const actor = await resolveActor(request);
   if (!actor) return unauthorized();
 
   const { id } = await context.params;
@@ -32,24 +37,7 @@ export async function POST(
   if (!parsed.success) return badRequest("invalid_body", parsed.error.issues);
   const carryOverTo = parsed.data.carry_over_to ?? "backlog";
 
-  const [sprint] = await db
-    .select({
-      id: sprints.id,
-      workspaceId: sprints.workspaceId,
-      status: sprints.status,
-      endsAt: sprints.endsAt,
-    })
-    .from(sprints)
-    .innerJoin(
-      workspaceMembers,
-      and(
-        eq(workspaceMembers.workspaceId, sprints.workspaceId),
-        eq(workspaceMembers.userId, actor.userId),
-      ),
-    )
-    .where(eq(sprints.id, sprintId))
-    .limit(1);
-
+  const sprint = await loadSprintForActor(actor, sprintId);
   if (!sprint) return notFound();
   if (sprint.status === "completed") return badRequest("sprint_already_completed");
 
@@ -164,6 +152,18 @@ export async function POST(
     .where(
       and(eq(cards.workspaceId, workspaceId), eq(cards.sprintId, sprintId)),
     );
+
+  await logActivity({
+    workspaceId,
+    actor,
+    action: "sprint.complete",
+    payload: {
+      sprint_id: sprintId,
+      carried_over: carried,
+      carried_to: carryOverTo,
+      completed_in_sprint: remaining,
+    },
+  });
 
   return ok({
     sprint: {

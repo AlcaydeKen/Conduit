@@ -11,7 +11,7 @@ import {
 import { notFound, ok, unauthorized } from "@/lib/api/response";
 
 export async function GET(request: Request) {
-  const actor = await resolveActor();
+  const actor = await resolveActor(request);
   if (!actor) return unauthorized();
 
   const url = new URL(request.url);

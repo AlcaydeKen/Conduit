@@ -22,7 +22,7 @@ const createSchema = z.object({
 });
 
 export async function GET(request: Request) {
-  const actor = await resolveActor();
+  const actor = await resolveActor(request);
   if (!actor) return unauthorized();
 
   const url = new URL(request.url);
@@ -46,7 +46,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const actor = await resolveActor();
+  const actor = await resolveActor(request);
   if (!actor) return unauthorized();
 
   const parsed = createSchema.safeParse(await request.json().catch(() => null));

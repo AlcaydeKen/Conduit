@@ -15,6 +15,7 @@
     "verify:ordering": "tsx --env-file=.env.local scripts/verify-ordering.ts",
     "verify:api": "tsx --env-file=.env.local scripts/verify-api.ts",
     "verify:filters": "tsx scripts/verify-filters.ts",
+    "verify:tenant": "tsx --env-file=.env.local scripts/verify-tenant.ts",
     "verify:sprints": "tsx --env-file=.env.local scripts/verify-sprints.ts"
   },
   "dependencies": {

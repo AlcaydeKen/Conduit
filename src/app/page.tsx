@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { auth, signOut } from "@/auth";
@@ -7,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   listWorkspaces,
-  resolveActor,
+  resolveSessionActor,
   resolveWorkspace,
 } from "@/lib/api/guards";
 import { defaultSprintFilter, getBoard } from "@/lib/board-queries";
@@ -23,7 +24,7 @@ export default async function HomePage({
   const session = await auth();
   if (!session?.user?.id) redirect("/signin");
 
-  const actor = await resolveActor();
+  const actor = await resolveSessionActor();
   if (!actor) redirect("/signin");
 
   const { workspace: workspaceParam, sprint: sprintParam } = await searchParams;
@@ -95,6 +96,14 @@ function Shell({
         <h1 className="text-xl font-semibold tracking-tight">Conduit</h1>
         <div className="flex items-center gap-3">
           <span className="text-muted-foreground text-sm">{userName}</span>
+          <Button
+            variant="outline"
+            size="sm"
+            nativeButton={false}
+            render={<Link href="/settings" />}
+          >
+            Settings
+          </Button>
           <form
             action={async () => {
               "use server";

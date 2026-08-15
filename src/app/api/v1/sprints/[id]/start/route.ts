@@ -1,40 +1,28 @@
 import { and, eq, ne } from "drizzle-orm";
 
 import { db } from "@/db";
-import { sprints, workspaceMembers } from "@/db/schema";
-import { parseIntParam, resolveActor } from "@/lib/api/guards";
+import { sprints } from "@/db/schema";
+import { logActivity } from "@/lib/api/activity";
+import {
+  loadSprintForActor,
+  parseIntParam,
+  resolveActor,
+} from "@/lib/api/guards";
 import { badRequest, conflict, notFound, ok, unauthorized } from "@/lib/api/response";
 
 export async function POST(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
-  const actor = await resolveActor();
+  const actor = await resolveActor(request);
   if (!actor) return unauthorized();
 
   const { id } = await context.params;
   const sprintId = parseIntParam(id);
   if (!sprintId) return notFound();
 
-  // Sprint lookup and membership proof in one statement.
-  const [sprint] = await db
-    .select({
-      id: sprints.id,
-      workspaceId: sprints.workspaceId,
-      status: sprints.status,
-      startsAt: sprints.startsAt,
-    })
-    .from(sprints)
-    .innerJoin(
-      workspaceMembers,
-      and(
-        eq(workspaceMembers.workspaceId, sprints.workspaceId),
-        eq(workspaceMembers.userId, actor.userId),
-      ),
-    )
-    .where(eq(sprints.id, sprintId))
-    .limit(1);
-
+  // Sprint lookup and tenant proof in one statement.
+  const sprint = await loadSprintForActor(actor, sprintId);
   if (!sprint) return notFound();
 
   if (sprint.status === "active") return ok({ sprint: { id: sprint.id, status: "active" } });
@@ -69,6 +57,13 @@ export async function POST(
       ),
     )
     .returning();
+
+  await logActivity({
+    workspaceId: sprint.workspaceId,
+    actor,
+    action: "sprint.start",
+    payload: { sprint_id: sprintId, name: updated.name },
+  });
 
   return ok({
     sprint: {

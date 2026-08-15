@@ -15,6 +15,8 @@ const eslintConfig = [
     ignores: [
       "node_modules/**",
       ".next/**",
+      // `pnpm build` writes here so it cannot clobber the dev server's `.next`.
+      ".next-build/**",
       "out/**",
       "build/**",
       "next-env.d.ts",
