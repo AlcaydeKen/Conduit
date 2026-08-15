@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "conduit": {
+      "command": "node",
+      "args": ["./mcp/dist/index.js"],
+      "env": {
+        "KANBAN_API_URL": "${KANBAN_API_URL:-http://localhost:3000}",
+        "KANBAN_API_KEY": "${KANBAN_API_KEY}"
+      }
+    }
+  }
+}

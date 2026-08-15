@@ -1,7 +1,7 @@
 # Implementation Roadmap: Conduit
 
-> **Current Phase:** Phase 5: MCP Server Implementation
-> **Status:** Phases 1–4 complete.
+> **Current Phase:** Phase 6: Asynchronous AI Queue & n8n
+> **Status:** Phases 1–5 complete.
 > **Reference Spec:** See `SPEC.md` for schema, security rules, and endpoints.
 
 ---
@@ -264,10 +264,36 @@
 ---
 
 ## Phase 5: MCP Server Implementation (`mcp/`)
-- [ ] Scaffold `@modelcontextprotocol/sdk` stdio server in `mcp/` directory.
-- [ ] Implement tools: `list_workspaces`, `list_sprints`, `get_board`, `search_cards`, `get_card`, `create_card`, `update_card`, `move_card`, `assign_card`, `comment_card`.
-- [ ] Wire tools to wrap REST API endpoints using `KANBAN_API_KEY`.
-- [ ] **Verification:** Register in local `.mcp.json` and test tool execution from Claude Code.
+- [x] Scaffold `@modelcontextprotocol/sdk` stdio server in `mcp/` directory.
+- [x] Implement tools: `list_workspaces`, `list_sprints`, `get_board`, `search_cards`, `get_card`, `create_card`, `update_card`, `move_card`, `assign_card`, `comment_card`.
+- [x] Wire tools to wrap REST API endpoints using `KANBAN_API_KEY`.
+- [x] **Verification:** Register in local `.mcp.json` and test tool execution from Claude Code.
+  - `pnpm verify:mcp` — 28 checks. Mints a throwaway key, spawns the built
+    `mcp/dist/index.js` over stdio, and drives all ten tools through a real MCP client:
+    tool list, reads, the full write path, and that failures arrive as tool errors rather
+    than crashes. Requires `pnpm dev` and `pnpm mcp:build`.
+
+### Phase 5 notes
+- The verification drives the **built bundle**, not the source. The bundle is what gets
+  registered, so a build that drops an import has to fail here rather than in someone's
+  editor a week later.
+- `mcp/` is a pnpm workspace package (`packages: ["mcp"]`), so one `pnpm install` at the
+  root covers both. It bundles with esbuild to a single ESM file, which means
+  `node ./mcp/dist/index.js` works from any cwd without resolving `node_modules`.
+- Diagnostics go to stderr. stdout is the protocol channel, and a stray `console.log`
+  corrupts the stream — which is why `readConfig` throws with the registration command in
+  the message instead of printing advice.
+- Tool descriptions state that a card in another workspace and a card that does not exist
+  return the same error. Without that, a model reads 404 as an invitation to try nearby
+  ids, and turns a deliberately silent boundary into an enumeration loop.
+- `move_card` advertises neighbour intent and has no `position` in its schema, and
+  `verify:mcp` asserts both. `update_card` refuses column and sprint for the same reason —
+  two tools that can move a card would mean one of them skips the ordering machinery.
+- `assign_card` and `update_card` share `PATCH /cards/:id` deliberately. Assignment has a
+  distinct failure mode — a user who is not a member of the workspace — and folding it into
+  a general edit hides that from the model.
+- `dist/` is gitignored. `.mcp.json` is committed but holds no secret: it reads
+  `KANBAN_API_URL` and `KANBAN_API_KEY` from the environment.
 
 ---
 

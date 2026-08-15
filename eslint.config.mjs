@@ -17,6 +17,7 @@ const eslintConfig = [
       ".next/**",
       // `pnpm build` writes here so it cannot clobber the dev server's `.next`.
       ".next-build/**",
+      "mcp/dist/**",
       "out/**",
       "build/**",
       "next-env.d.ts",

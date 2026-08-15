@@ -1,7 +1,8 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
 # dependencies
-/node_modules
+# Unanchored: workspace packages such as mcp/ have their own node_modules.
+node_modules/
 /.pnp
 .pnp.*
 .yarn/*
@@ -42,3 +43,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# mcp build output
+/mcp/dist/

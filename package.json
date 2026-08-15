@@ -16,7 +16,9 @@
     "verify:api": "tsx --env-file=.env.local scripts/verify-api.ts",
     "verify:filters": "tsx scripts/verify-filters.ts",
     "verify:tenant": "tsx --env-file=.env.local scripts/verify-tenant.ts",
-    "verify:sprints": "tsx --env-file=.env.local scripts/verify-sprints.ts"
+    "verify:sprints": "tsx --env-file=.env.local scripts/verify-sprints.ts",
+    "verify:mcp": "tsx --env-file=.env.local scripts/verify-mcp.ts",
+    "mcp:build": "pnpm --filter conduit-mcp build"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.10.0",
@@ -56,6 +58,7 @@
     "shadcn": "^4.18.0",
     "tailwindcss": "^4",
     "tsx": "^4.20.5",
-    "typescript": "^5"
+    "typescript": "^5",
+    "@modelcontextprotocol/sdk": "^1.30.0"
   }
 }
