@@ -234,8 +234,27 @@
     `loadCardForActor` has already proven tenancy. That is enrichment on an id already
     established as safe, not a second boundary — and no write depends on it.
 
+- `activity.actor` records `key:<id>` for a machine, never the key's label. The label is
+  free text its creator chose, and a user actor is recorded as a bare user id — so a member
+  could mint a key labelled with a colleague's user id and have everything it did attributed
+  to them. `key:<id>` cannot collide with a user id, and it identifies the key rather than a
+  name that is neither unique nor stable across revoke-and-recreate. Reading the log now
+  needs a join to `api_keys` to show something human, which is the same indirection a user
+  id already needs.
+
 ### Carried into Phase 5+
 - `api_keys.scopes` grants nothing and is checked nowhere. Enforce it or drop the column.
+- **A key survives its creator's offboarding.** Key auth never touches `workspace_members`;
+  it binds to `workspace_id` directly. Delete a person's membership and their keys keep
+  full read/write access to the workspace, and `created_by` is `ON DELETE SET NULL`, so
+  deleting the user row leaves the key with no creator at all. There is no member management
+  endpoint yet, so removal is a manual database operation — which means nothing today can
+  even trigger a cleanup hook. Decide deliberately whether a key is a workspace-scoped
+  credential (current model, revoked only in settings) or a delegation of its creator's
+  access (revoke on membership loss). Do not leave it accidental.
+- `activity` is write-only. Nothing reads it, so the audit trail cannot yet contradict
+  anyone — including the impersonation case above, whose one contradicting record is the
+  `api_key.create` row.
 - The `ALLOWED_EMAILS` allowlist is still only enforced in the `signIn` callback, so
   removing an address does not end a live JWT and `updateAge` re-issues on activity. Now
   more visible than it was: a person removed from the allowlist also keeps every API key

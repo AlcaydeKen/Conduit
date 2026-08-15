@@ -89,7 +89,13 @@ async function resolveKeyActor(bearer: string): Promise<Actor | null> {
     kind: "key",
     keyId: row.id,
     workspaceId: row.workspaceId,
-    label: row.label,
+    // Namespaced by id, never the raw label. `activity.actor` holds a user id
+    // for a person, and `label` is free text its creator chose — so a member
+    // could mint a key labelled with a colleague's user id and have every
+    // action it takes recorded as that colleague's. `key:<id>` cannot collide
+    // with a user id, and identifies the key itself rather than a name that is
+    // neither unique nor stable across revoke-and-recreate.
+    label: `key:${row.id}`,
     scopes: row.scopes,
   };
 }
