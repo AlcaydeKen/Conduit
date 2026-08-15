@@ -309,9 +309,10 @@
 - [ ] **Verification:** Queue draft job in UI, run n8n workflow, verify card updates
       asynchronously. *(blocked on the two above; the server half is covered by
       `verify:queue`, and no UI yet enqueues a job)*
-  - `pnpm verify:queue` — 33 checks over HTTP. Exactly-once handoff, the poll floor, a
+  - `pnpm verify:queue` — 36 checks over HTTP. Exactly-once handoff, the poll floor, a
     workspace key refused on both endpoints, forged and expired tokens, a token presented
-    against another job, the replay conflict, and the sweeper's requeue-then-fail path.
+    against another job, the replay conflict, the fencing case below, and the sweeper's
+    requeue-then-fail path.
 
 ### Phase 6 notes
 - The claim is one statement, and it has to be. neon-http gives every statement its own
@@ -328,6 +329,18 @@
   comes from the signed token payload: not the body, not the URL, not the credential.
 - Single use is enforced by `status = 'claimed'` in the update's WHERE, so the first result
   moves the row out of reach and a replay matches nothing. No separate nonce table.
+- **The token is a fencing token.** It carries the claim generation — `attempts` at the
+  moment of the claim — and the result update matches on it. Status alone was not enough:
+  the sweep threshold is ten minutes and the token lives fifteen, so a runner that is slow
+  rather than dead outlives its own claim. Its job gets swept back to `pending`, another
+  runner picks it up, and the first runner's token is still signed and unexpired. Matching
+  only on `status = 'claimed'` let the *superseded* runner write over the live claim, and
+  the legitimate runner then got the 409 — the zombie won and the live runner was refused.
+  Clamping the TTL below the sweep threshold would also close it, but would refuse slow
+  runs nobody superseded; fencing accepts a result whenever the runner still holds the
+  claim and refuses it exactly when it does not. A superseded runner now gets
+  `job_reclaimed`, distinct from `job_already_resolved`, because "you ran twice" and "you
+  ran too slowly and lost the job" are different operator problems.
 - The signature is checked *before* the payload is parsed. Parsing attacker-controlled JSON
   first would mean deciding what to do with a payload there is no reason to trust.
 - `AI_JOB_SECRET` is separate from `AUTH_SECRET` deliberately: rotating one must not

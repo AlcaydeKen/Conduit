@@ -105,6 +105,9 @@ export async function POST(request: Request) {
     token: signJobToken({
       job_id: row.id,
       workspace_id: row.workspace_id,
+      // The claim generation, so a superseded runner cannot report back. See
+      // the fencing note on JobTokenPayload.
+      attempt: row.attempts,
       exp,
     }),
     expires_at: new Date(exp * 1000).toISOString(),

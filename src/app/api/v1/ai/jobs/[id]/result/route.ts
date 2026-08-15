@@ -78,6 +78,10 @@ export async function POST(
         eq(aiJobs.id, jobId),
         eq(aiJobs.workspaceId, verified.payload.workspace_id),
         eq(aiJobs.status, "claimed"),
+        // The fence. A runner that was swept and superseded still holds a
+        // signed, unexpired token, and without this its result would land on
+        // whoever holds the claim now.
+        eq(aiJobs.attempts, verified.payload.attempt),
       ),
     )
     .returning({
@@ -91,10 +95,12 @@ export async function POST(
 
   if (!updated) {
     // The signature already proved this token was minted for this job in this
-    // workspace, so the row existing but not being claimable means it was
-    // resolved already — a replay, not a probe.
+    // workspace, so a row that exists but did not match is either resolved
+    // already or has moved on to a later claim. Those are different operator
+    // problems: one means the runner ran twice, the other means it ran too
+    // slowly and lost the job.
     const [existing] = await db
-      .select({ status: aiJobs.status })
+      .select({ status: aiJobs.status, attempts: aiJobs.attempts })
       .from(aiJobs)
       .where(
         and(
@@ -105,7 +111,11 @@ export async function POST(
       .limit(1);
 
     if (!existing) return notFound();
-    return conflict("job_already_resolved");
+    return conflict(
+      existing.attempts === verified.payload.attempt
+        ? "job_already_resolved"
+        : "job_reclaimed",
+    );
   }
 
   await db.insert(activity).values({

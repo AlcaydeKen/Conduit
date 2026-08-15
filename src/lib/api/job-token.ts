@@ -8,6 +8,23 @@ export const TOKEN_TTL_SECONDS = 15 * 60;
 export type JobTokenPayload = {
   job_id: number;
   workspace_id: number;
+  /**
+   * The claim generation this token was minted for — `ai_jobs.attempts` at the
+   * moment of the claim. This is a fencing token.
+   *
+   * Without it, a runner that is slow rather than dead can outlive its own
+   * claim: the sweeper returns the job to `pending` after ten minutes, another
+   * runner picks it up, and the first runner's token is still signed and
+   * unexpired. Matching only on `status = 'claimed'` would then let the
+   * superseded runner write its result over the live one's claim, and the
+   * legitimate runner would be the one refused.
+   *
+   * Clamping the TTL below the sweep threshold would also close that hole, but
+   * at the cost of refusing slow runs nobody superseded. Fencing accepts a
+   * result whenever the runner still holds the claim, and refuses it exactly
+   * when it does not.
+   */
+  attempt: number;
   exp: number;
 };
 
@@ -51,6 +68,7 @@ export function verifyJobToken(token: string, now = Date.now()): VerifyResult {
   if (
     !Number.isInteger(payload?.job_id) ||
     !Number.isInteger(payload?.workspace_id) ||
+    !Number.isInteger(payload?.attempt) ||
     !Number.isInteger(payload?.exp)
   ) {
     return { ok: false, reason: "malformed" };

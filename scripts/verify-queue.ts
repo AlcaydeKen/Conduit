@@ -192,6 +192,7 @@ async function main() {
     const expired = signJobToken({
       job_id: jobId,
       workspace_id: workspace.id,
+      attempt: 1,
       exp: Math.floor(Date.now() / 1000) - 60,
     });
     const expiredResponse = await post(
@@ -267,6 +268,73 @@ async function main() {
       "and the first result stands",
       afterReplay?.status === "done" && afterReplay?.error === null,
       afterReplay,
+    );
+
+    console.log("\n7b. a superseded runner cannot report back");
+    // The exact shape of the bug this exists for: a runner that is slow rather
+    // than dead. The sweeper returns its job after ten minutes and someone else
+    // claims it, but the first runner's token is still signed and unexpired for
+    // another five. Without a fence, its result lands on the live claim.
+    await db
+      .update(aiJobs)
+      .set({
+        status: "claimed",
+        claimedAt: new Date(Date.now() - 30 * 60 * 1000),
+        attempts: 1,
+        result: null,
+        error: null,
+      })
+      .where(eq(aiJobs.id, otherJobId));
+
+    const staleToken = signJobToken({
+      job_id: otherJobId,
+      workspace_id: workspace.id,
+      attempt: 1,
+      exp: Math.floor(Date.now() / 1000) + 600,
+    });
+
+    await db
+      .update(apiKeys)
+      .set({ lastUsedAt: null })
+      .where(eq(apiKeys.keyHash, service.hash));
+    const reclaim = await post("/api/v1/ai/jobs/claim", service.plaintext);
+    const reclaimBody = await reclaim.json();
+    check(
+      "the sweeper hands the job to a second runner",
+      reclaimBody.job?.id === otherJobId && reclaimBody.job?.attempts === 2,
+      reclaimBody.job,
+    );
+
+    const zombie = await post(`/api/v1/ai/jobs/${otherJobId}/result`, staleToken, {
+      status: "done",
+      result: { text: `${MARKER} zombie output` },
+    });
+    check(
+      "the superseded runner's still-valid token is refused",
+      zombie.status === 409,
+      zombie.status,
+    );
+    check(
+      "and is told it lost the job, not that the job is finished",
+      (await zombie.json()).error === "job_reclaimed",
+    );
+
+    const live = await post(
+      `/api/v1/ai/jobs/${otherJobId}/result`,
+      reclaimBody.token,
+      { status: "done", result: { text: `${MARKER} live output` } },
+    );
+    check("the current claimant is still accepted", live.status === 200, live.status);
+
+    const [afterFence] = await db
+      .select({ result: aiJobs.result })
+      .from(aiJobs)
+      .where(eq(aiJobs.id, otherJobId))
+      .limit(1);
+    check(
+      "and its result is the one stored",
+      JSON.stringify(afterFence?.result).includes("live output"),
+      afterFence?.result,
     );
 
     console.log("\n8. abandoned jobs come back");
