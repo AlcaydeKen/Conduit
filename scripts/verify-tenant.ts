@@ -564,6 +564,104 @@ async function main() {
       afterAccountDeletion.status,
     );
 
+    console.log("\n9d. the audit log reads back, and resolves who acted");
+    // Produce one machine action and read it back.
+    const auditCard = await bearerB(`/api/v1/cards`, {
+      method: "POST",
+      body: JSON.stringify({
+        column_id: fixture.columnId,
+        title: `${MARKER} audit subject`,
+      }),
+    });
+    check("a write to log is 200", auditCard.status === 200, auditCard.status);
+
+    const log = await bearerB(`/api/v1/activity`);
+    check("GET /activity is 200", log.status === 200, log.status);
+    const logBody = await log.json();
+    const logged = logBody.entries?.find(
+      (entry: { action: string }) => entry.action === "card.create",
+    );
+    check("the card creation is in the log", Boolean(logged), logBody.entries?.length);
+    check(
+      "the actor resolves to a key, not a bare string",
+      logged?.actor?.kind === "key",
+      logged?.actor,
+    );
+    check(
+      "carrying the key id and its label",
+      typeof logged?.actor?.id === "number" && logged?.actor?.label === `${MARKER} key B`,
+      logged?.actor,
+    );
+    check(
+      "and the card it touched",
+      logged?.card?.title === `${MARKER} audit subject`,
+      logged?.card,
+    );
+
+    // A key labelled as a person must still resolve as a key. This is the whole
+    // reason `activity.actor` stores `key:<id>` and not the label.
+    const impostor = generateApiKey();
+    const [impostorRow] = await db
+      .insert(apiKeys)
+      .values({
+        workspaceId: fixture.workspaceId,
+        label: user.id,
+        keyHash: impostor.hash,
+        createdBy: tenantBUser.id,
+        scopes: ["board:read", "board:write"],
+      })
+      .returning({ id: apiKeys.id });
+
+    await asKey(impostor.plaintext)(`/api/v1/cards`, {
+      method: "POST",
+      body: JSON.stringify({
+        column_id: fixture.columnId,
+        title: `${MARKER} impostor subject`,
+      }),
+    });
+
+    const afterImpostor = await bearerB(`/api/v1/activity`);
+    const impostorEntry = (await afterImpostor.json()).entries?.find(
+      (entry: { card?: { title?: string } }) =>
+        entry.card?.title === `${MARKER} impostor subject`,
+    );
+    check(
+      "a key labelled with a user id still resolves as a key",
+      impostorEntry?.actor?.kind === "key",
+      impostorEntry?.actor,
+    );
+    check(
+      "identified by its own id, not the name it claims",
+      impostorEntry?.actor?.id === impostorRow.id,
+      { got: impostorEntry?.actor, expected: impostorRow.id },
+    );
+
+    const paged = await bearerB(`/api/v1/activity?limit=1`);
+    const pagedBody = await paged.json();
+    check("limit is honoured", pagedBody.entries?.length === 1, pagedBody.entries?.length);
+    check(
+      "and a cursor is offered when more remain",
+      typeof pagedBody.next_before === "number",
+      pagedBody.next_before,
+    );
+
+    const older = await bearerB(
+      `/api/v1/activity?limit=1&before=${pagedBody.next_before}`,
+    );
+    const olderBody = await older.json();
+    check(
+      "paging back returns a different, older entry",
+      olderBody.entries?.[0]?.id < pagedBody.entries?.[0]?.id,
+      { first: pagedBody.entries?.[0]?.id, second: olderBody.entries?.[0]?.id },
+    );
+
+    const foreignLog = await bearerA(`/api/v1/activity?workspace=${fixture.workspaceId}`);
+    check(
+      "another tenant's log is 404, not someone else's history",
+      foreignLog.status === 404,
+      foreignLog.status,
+    );
+
     console.log("\n10. assignees cannot be borrowed from another tenant");
     const foreignAssignee = await bearerB(`/api/v1/cards`, {
       method: "POST",

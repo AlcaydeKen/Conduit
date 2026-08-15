@@ -289,9 +289,17 @@
     through `resolveClaimKey`.
   - Cost: one `EXISTS` on a primary-key index per machine request, folded into the existing
     statement rather than added as a second round trip.
-- `activity` is write-only. Nothing reads it, so the audit trail cannot yet contradict
-  anyone — including the impersonation case above, whose one contradicting record is the
-  `api_key.create` row.
+- `activity` is readable: `GET /api/v1/activity` and an Audit log table in settings. It
+  resolves each `actor` per namespace — a user id to a name and avatar, `key:<id>` to the
+  key, `job:<id>` to the AI job — and always shows the key **id** beside its label, never
+  the label alone. That is the point of the namespacing: a key labelled with a colleague's
+  user id still reads as `key #7`, and `verify:tenant` asserts it by minting exactly such a
+  key and checking the log resolves it to its own id.
+  - Keyset pagination on `activity.id`, not an offset. On an append-only log an offset
+    silently repeats or skips rows as new ones land while someone is reading.
+  - A deleted user or a deleted key still resolves — as the bare id, or "deleted key". The
+    log outlives its subjects on purpose, so an entry is never dropped from history because
+    the thing it refers to is gone.
 - The `ALLOWED_EMAILS` allowlist is still only enforced in the `signIn` callback, so
   removing an address does not end a live JWT and `updateAge` re-issues on activity. Now
   more visible than it was: a person removed from the allowlist also keeps every API key
