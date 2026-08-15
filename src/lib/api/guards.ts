@@ -1,4 +1,4 @@
-import { and, asc, eq, isNotNull, sql } from "drizzle-orm";
+import { and, asc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 
 import { auth } from "@/auth";
 import { db } from "@/db";
@@ -98,6 +98,68 @@ async function resolveKeyActor(bearer: string): Promise<Actor | null> {
     label: `key:${row.id}`,
     scopes: row.scopes,
   };
+}
+
+export type ClaimKey = { keyId: number; label: string };
+
+export type ClaimOutcome =
+  | { ok: true; key: ClaimKey }
+  | { ok: false; reason: "unauthorized" | "rate_limited" };
+
+/**
+ * The one credential `resolveActor` deliberately refuses: the service-scoped
+ * claim key, `workspace_id IS NULL`.
+ *
+ * Only `/ai/jobs/claim` may call this. Its blast radius is genuinely not
+ * tenant-bounded — whoever holds it can drain the queue for every workspace and
+ * read every job's input — which is why it is confined to one endpoint, rate
+ * limited here, and never able to say which tenant a *result* belongs to. That
+ * is what the signed execution token is for.
+ *
+ * The floor is enforced in the same statement that authenticates, so a caller
+ * cannot spin faster than it by racing two requests.
+ */
+export async function resolveClaimKey(
+  request: Request,
+  minIntervalSeconds: number,
+): Promise<ClaimOutcome> {
+  const bearer = readBearer(request);
+  if (!bearer) return { ok: false, reason: "unauthorized" };
+
+  const hash = hashApiKey(bearer);
+
+  const [row] = await db
+    .update(apiKeys)
+    .set({ lastUsedAt: sql`now()` })
+    .where(
+      and(
+        eq(apiKeys.keyHash, hash),
+        eq(apiKeys.revoked, false),
+        isNull(apiKeys.workspaceId),
+        sql`(${apiKeys.lastUsedAt} IS NULL OR ${apiKeys.lastUsedAt} < now() - make_interval(secs => ${minIntervalSeconds}))`,
+      ),
+    )
+    .returning({ id: apiKeys.id, label: apiKeys.label });
+
+  if (row) return { ok: true, key: { keyId: row.id, label: row.label } };
+
+  // No row matched, which is either a bad credential or one that is simply
+  // early. Only the failure path pays for the distinction, and the two must not
+  // be conflated: answering 401 to a valid-but-early poll would send an
+  // operator hunting a credential problem that does not exist.
+  const [exists] = await db
+    .select({ id: apiKeys.id })
+    .from(apiKeys)
+    .where(
+      and(
+        eq(apiKeys.keyHash, hash),
+        eq(apiKeys.revoked, false),
+        isNull(apiKeys.workspaceId),
+      ),
+    )
+    .limit(1);
+
+  return { ok: false, reason: exists ? "rate_limited" : "unauthorized" };
 }
 
 /**

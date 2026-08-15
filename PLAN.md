@@ -1,7 +1,8 @@
 # Implementation Roadmap: Conduit
 
 > **Current Phase:** Phase 6: Asynchronous AI Queue & n8n
-> **Status:** Phases 1–5 complete.
+> **Status:** Phases 1–5 complete. Phase 6 server-side complete; Ollama, n8n, and the
+> end-to-end check are the remaining work and need a Docker host.
 > **Reference Spec:** See `SPEC.md` for schema, security rules, and endpoints.
 
 ---
@@ -298,8 +299,53 @@
 ---
 
 ## Phase 6: Asynchronous AI Queue & n8n
-- [ ] Build `POST /api/v1/ai/jobs/claim` using `FOR UPDATE SKIP LOCKED` and return 15-min HMAC token.
-- [ ] Build `POST /api/v1/ai/jobs/:id/result` validating HMAC execution token.
-- [ ] Deploy/configure Ollama container running `qwen3:4b`.
-- [ ] Configure n8n polling workflow (1-min schedule) to claim jobs, run Ollama, and submit results.
-- [ ] **Verification:** Queue draft job in UI, run n8n workflow, verify card updates asynchronously.
+- [x] Build `POST /api/v1/ai/jobs/claim` using `FOR UPDATE SKIP LOCKED` and return 15-min HMAC token.
+- [x] Build `POST /api/v1/ai/jobs/:id/result` validating HMAC execution token.
+- [ ] Deploy/configure Ollama container running `qwen3:4b`. *(compose file written —
+      `ops/ollama.compose.yml` — but bringing it up needs your Docker host)*
+- [ ] Configure n8n polling workflow (1-min schedule) to claim jobs, run Ollama, and submit
+      results. *(importable workflow written — `ops/n8n-ai-job-runner.json` — but wiring it
+      to your n8n instance and minting the claim key is yours)*
+- [ ] **Verification:** Queue draft job in UI, run n8n workflow, verify card updates
+      asynchronously. *(blocked on the two above; the server half is covered by
+      `verify:queue`, and no UI yet enqueues a job)*
+  - `pnpm verify:queue` — 33 checks over HTTP. Exactly-once handoff, the poll floor, a
+    workspace key refused on both endpoints, forged and expired tokens, a token presented
+    against another job, the replay conflict, and the sweeper's requeue-then-fail path.
+
+### Phase 6 notes
+- The claim is one statement, and it has to be. neon-http gives every statement its own
+  transaction, so `SELECT ... FOR UPDATE SKIP LOCKED` followed by a separate `UPDATE` would
+  release the lock between the two and hand the same job to two runners. The locking select
+  is nested inside the update instead.
+- `SKIP LOCKED` here does not contradict the no-locking stance on card moves. A work queue
+  genuinely needs exactly-once handoff; card ordering does not, and would pay for locks it
+  cannot benefit from.
+- `POST /ai/jobs/:id/result` accepts **no API key at all**, not even a valid workspace one.
+  n8n drains the queue for every tenant, so any credential it holds is cross-workspace by
+  definition — if a key could authorise this call, a workspace-2 key could post a result
+  onto a workspace-1 job and inject model output into another tenant's card. The tenant
+  comes from the signed token payload: not the body, not the URL, not the credential.
+- Single use is enforced by `status = 'claimed'` in the update's WHERE, so the first result
+  moves the row out of reach and a replay matches nothing. No separate nonce table.
+- The signature is checked *before* the payload is parsed. Parsing attacker-controlled JSON
+  first would mean deciding what to do with a payload there is no reason to trust.
+- `AI_JOB_SECRET` is separate from `AUTH_SECRET` deliberately: rotating one must not
+  invalidate the other, and a queue token and a session cookie must not be forgeable from
+  the same stolen value.
+- A rate-limited poll answers 429, not 401. Conflating them would send an operator hunting
+  a credential problem that does not exist. The floor is enforced inside the authenticating
+  statement so two racing requests cannot both pass it.
+- The sweeper runs inside the claim handler rather than as its own cron. The runner polls
+  every minute anyway, so a job whose runner died is retried — or failed permanently at the
+  fourth attempt — the next time anyone asks for work.
+- Postgres 42804: a `CASE` over two bare enum literals is typed `text` and will not assign
+  to an enum column. Both branches need `::ai_job_status`. Found at runtime, not by
+  typecheck — Drizzle's `sql` template is opaque to it.
+
+### Carried into Phase 6 completion
+- Nothing in the UI enqueues an `ai_jobs` row yet, so the end-to-end check ("queue a draft
+  job in the UI") has no button to press. The queue is driven only by direct inserts and by
+  `verify:queue`.
+- `ops/n8n-ai-job-runner.json` is written against current n8n node typeVersions and has not
+  been imported into a live instance. Treat the first import as a review, not a paste.

@@ -1,0 +1,154 @@
+{
+  "name": "Conduit — AI job runner",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "schedule",
+      "name": "Every minute",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-380, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CONDUIT_API_URL }}/api/v1/ai/jobs/claim",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.CONDUIT_CLAIM_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "claim",
+      "name": "Claim a job",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-160, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.body.job }}",
+              "rightValue": "",
+              "operator": {
+                "type": "object",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "has-job",
+      "name": "Anything to do?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [60, 0]
+    },
+    {
+      "parameters": {},
+      "id": "idle",
+      "name": "Queue empty",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [280, 160]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:11434/api/generate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'qwen3:4b', stream: false, prompt: `You are helping run a kanban board. Job kind: ${$json.body.job.kind}.\\n\\nInput:\\n${JSON.stringify($json.body.job.input, null, 2)}\\n\\nRespond with the requested content only.` }) }}",
+        "options": {
+          "timeout": 600000,
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "ollama",
+      "name": "Run Ollama",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [280, -80]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CONDUIT_API_URL }}/api/v1/ai/jobs/{{ $('Claim a job').item.json.body.job.id }}/result",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Claim a job').item.json.body.token }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.statusCode === 200 ? JSON.stringify({ status: 'done', result: { text: $json.body.response, model: $json.body.model } }) : JSON.stringify({ status: 'failed', error: `ollama returned ${$json.statusCode}` }) }}",
+        "options": {}
+      },
+      "id": "report",
+      "name": "Report result",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, -80]
+    }
+  ],
+  "connections": {
+    "Every minute": {
+      "main": [[{ "node": "Claim a job", "type": "main", "index": 0 }]]
+    },
+    "Claim a job": {
+      "main": [[{ "node": "Anything to do?", "type": "main", "index": 0 }]]
+    },
+    "Anything to do?": {
+      "main": [
+        [{ "node": "Run Ollama", "type": "main", "index": 0 }],
+        [{ "node": "Queue empty", "type": "main", "index": 0 }]
+      ]
+    },
+    "Run Ollama": {
+      "main": [[{ "node": "Report result", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

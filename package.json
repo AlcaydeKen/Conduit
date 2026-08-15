@@ -18,7 +18,8 @@
     "verify:tenant": "tsx --env-file=.env.local scripts/verify-tenant.ts",
     "verify:sprints": "tsx --env-file=.env.local scripts/verify-sprints.ts",
     "verify:mcp": "tsx --env-file=.env.local scripts/verify-mcp.ts",
-    "mcp:build": "pnpm --filter conduit-mcp build"
+    "mcp:build": "pnpm --filter conduit-mcp build",
+    "verify:queue": "tsx --env-file=.env.local scripts/verify-queue.ts"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.10.0",

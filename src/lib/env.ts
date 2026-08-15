@@ -18,6 +18,13 @@ const serverEnvSchema = z.object({
   AUTH_GITHUB_SECRET: z.string().min(1),
   /** Comma-separated allowlist. Only these emails may sign in. */
   ALLOWED_EMAILS: emailList,
+  /**
+   * Signs the short-lived execution tokens handed out by `/ai/jobs/claim`.
+   * Deliberately not `AUTH_SECRET`: rotating one should not invalidate the
+   * other, and a queue token and a session cookie should never be forgeable
+   * from the same stolen value.
+   */
+  AI_JOB_SECRET: z.string().min(32),
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;

@@ -1,0 +1,33 @@
+# Ollama as its own container, publishing 11434.
+#
+# Deliberately separate from any existing n8n compose file: n8n reaches this at
+# http://host.docker.internal:11434, so nothing about the current n8n container,
+# its volumes, or its network has to change.
+#
+#   docker compose -f ops/ollama.compose.yml up -d
+#   docker exec conduit-ollama ollama pull qwen3:4b
+#   docker exec conduit-ollama ollama run qwen3:4b "hi"
+#
+# Then prove reachability from inside n8n, which is the check that actually
+# matters — the model responding on the host says nothing about the container
+# being able to see it:
+#
+#   docker exec <n8n-container> \
+#     curl -s http://host.docker.internal:11434/api/tags
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: conduit-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    # Linux hosts do not resolve host.docker.internal by default; this makes the
+    # n8n-side URL identical across macOS, Windows and Linux.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  ollama-models:
