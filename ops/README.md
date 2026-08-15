@@ -56,13 +56,38 @@ Create the credential first, then import — n8n links them by name.
 1. **Credentials → New → Header Auth**, named exactly `Conduit claim key`.
    - Name: `Authorization`
    - Value: `Bearer cdt_...` (the whole line the mint script printed)
-2. **Import `n8n-ai-job-runner.json`.** Open *Claim a job* and confirm the
-   credential field shows `Conduit claim key`. If it is empty, pick it from the
-   dropdown — the id in the JSON is a placeholder and only the name matches.
+2. **Import `n8n-ai-job-runner.json`**, then open *Claim a job* and pick
+   `Conduit claim key` in the credential dropdown. The JSON carries no
+   credential reference on purpose: credential ids are per-instance, so a
+   hardcoded one imports as a dangling reference and the node fails with
+   "Credentials not found" rather than matching by name.
 3. **Run it manually once** before enabling the schedule.
+
+   Read the *Claim a job* node's output rather than trusting the green ticks.
+   You want `statusCode: 200` and `body: {"job": null}` on an empty queue. See
+   "The failure that looks like success" below for why the canvas cannot tell
+   you this.
 
 The base URL is hardcoded to `http://host.docker.internal:3000` in the two
 Conduit nodes. Change both if the app is not on the host's port 3000.
+
+### The failure that looks like success
+
+`Anything to do?` branches on whether `body.job.id` exists. A `401` has no
+`body.job` either — so an unauthenticated runner took the *same* branch as an
+idle one, landed on *Queue empty*, and reported a clean green execution every
+minute forever. Nothing on the canvas distinguished "no work" from "no
+credential", and the queue quietly filled up.
+
+`Claim accepted?` now sits between them and tests `statusCode === 200`.
+Anything else goes to a `stopAndError` that fails the execution with the status
+and body attached, so it shows up red in Executions and can drive n8n's error
+workflow. `429` is included deliberately: the claim endpoint enforces a
+5-second floor per key, and hitting it on a 1-minute schedule means two runners
+are sharing one credential.
+
+This is the same shape as the `$env` problem below — a misconfiguration that
+produces silence rather than an error. Both were worth an extra node.
 
 ### Why a credential rather than `$env`
 
