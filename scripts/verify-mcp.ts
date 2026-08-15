@@ -82,7 +82,7 @@ async function main() {
     workspaceId: workspace.id,
     label: LABEL,
     keyHash: generated.hash,
-    scopes: [],
+    scopes: ["board:read", "board:write"],
   });
 
   const transport = new StdioClientTransport({

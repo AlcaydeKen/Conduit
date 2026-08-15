@@ -24,6 +24,20 @@ export function conflict(error: string): Response {
   return Response.json({ error }, { status: 409 });
 }
 
+/**
+ * The only 403 in the system, and it is not a tenancy answer.
+ *
+ * It says "your key may not do this", which is a fact about the caller's own
+ * credential. It is returned before any row is loaded, so it can never stand in
+ * for the 404 that a missing-or-other-tenant row must always produce.
+ */
+export function insufficientScope(required: string): Response {
+  return Response.json(
+    { error: "insufficient_scope", required },
+    { status: 403 },
+  );
+}
+
 export function ok<T>(data: T): Response {
   return Response.json(data, {
     status: 200,

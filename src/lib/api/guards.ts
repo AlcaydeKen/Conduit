@@ -10,6 +10,8 @@ import {
   workspaces,
 } from "@/db/schema";
 import { hashApiKey, readBearer } from "@/lib/api/keys";
+import { insufficientScope } from "@/lib/api/response";
+import { SCOPES, hasScope, type Scope } from "@/lib/api/scopes";
 
 export type Actor =
   | {
@@ -100,6 +102,24 @@ async function resolveKeyActor(bearer: string): Promise<Actor | null> {
   };
 }
 
+/**
+ * Refuses an actor that lacks a scope, or null when it may proceed.
+ *
+ * A signed-in person is never scope-checked: their permissions come from
+ * `workspace_members`, and a scope is a property of a *key*. Handing users an
+ * implicit scope set would mean two authorisation systems disagreeing about the
+ * same person.
+ *
+ * Call this before loading anything. A 403 that depends on whether a row exists
+ * would leak the row's existence, which is precisely what the 404 rule spends
+ * its effort hiding.
+ */
+export function requireScope(actor: Actor, scope: Scope): Response | null {
+  if (actor.kind === "user") return null;
+  if (hasScope(actor.scopes, scope)) return null;
+  return insufficientScope(scope);
+}
+
 export type ClaimKey = { keyId: number; label: string };
 
 export type ClaimOutcome =
@@ -139,9 +159,21 @@ export async function resolveClaimKey(
         sql`(${apiKeys.lastUsedAt} IS NULL OR ${apiKeys.lastUsedAt} < now() - make_interval(secs => ${minIntervalSeconds}))`,
       ),
     )
-    .returning({ id: apiKeys.id, label: apiKeys.label });
+    .returning({
+      id: apiKeys.id,
+      label: apiKeys.label,
+      scopes: apiKeys.scopes,
+    });
 
-  if (row) return { ok: true, key: { keyId: row.id, label: row.label } };
+  if (row) {
+    // A workspace-less key still has to hold the scope. Otherwise any service
+    // key ever minted for some future purpose could drain the queue, and the
+    // column would be describing an intent it does not enforce.
+    if (!hasScope(row.scopes, SCOPES.AI_CLAIM)) {
+      return { ok: false, reason: "unauthorized" };
+    }
+    return { ok: true, key: { keyId: row.id, label: row.label } };
+  }
 
   // No row matched, which is either a bad credential or one that is simply
   // early. Only the failure path pays for the distinction, and the two must not

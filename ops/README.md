@@ -76,10 +76,11 @@ insert into api_keys (workspace_id, label, key_hash, scopes)
 values (null, 'n8n claim key', '<sha256-hex>', '["ai:claim"]'::jsonb);
 ```
 
-`workspace_id IS NULL` is what makes it a service key. Verified: a key inserted
+`workspace_id IS NULL` is what makes it a service key, and `["ai:claim"]` is now
+required rather than decorative — the claim endpoint checks it, so a
+workspace-less key minted without that scope is refused. Verified: a key inserted
 by exactly this statement claims successfully and is refused with 401 on
-`/api/v1/board`. Note `scopes` is recorded but not yet enforced anywhere — it
-documents intent, and grants nothing.
+`/api/v1/board`.
 
 `workspace_id IS NULL` is what makes it a service key — and what makes every
 other endpoint refuse it.

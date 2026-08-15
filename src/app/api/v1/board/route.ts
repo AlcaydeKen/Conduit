@@ -5,14 +5,19 @@ import {
 } from "@/lib/board-queries";
 import {
   parseIntParam,
+  requireScope,
   resolveActor,
   resolveWorkspace,
 } from "@/lib/api/guards";
+import { SCOPES } from "@/lib/api/scopes";
 import { notFound, ok, unauthorized } from "@/lib/api/response";
 
 export async function GET(request: Request) {
   const actor = await resolveActor(request);
   if (!actor) return unauthorized();
+
+  const denied = requireScope(actor, SCOPES.BOARD_READ);
+  if (denied) return denied;
 
   const url = new URL(request.url);
 

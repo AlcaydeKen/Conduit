@@ -128,7 +128,7 @@ async function main() {
       workspaceId: workspaceB.id,
       label: `${MARKER} key B`,
       keyHash: generatedB.hash,
-      scopes: [],
+      scopes: ["board:read", "board:write"],
     });
 
     const generatedA = generateApiKey();
@@ -136,7 +136,7 @@ async function main() {
       workspaceId: tenantA.id,
       label: `${MARKER} key A`,
       keyHash: generatedA.hash,
-      scopes: [],
+      scopes: ["board:read", "board:write"],
     });
     keyA = generatedA.plaintext;
 
@@ -157,7 +157,7 @@ async function main() {
         label: `${MARKER} revoked key`,
         keyHash: generatedRevoked.hash,
         revoked: true,
-        scopes: [],
+        scopes: ["board:read", "board:write"],
       })
       .returning({ id: apiKeys.id });
     revokedKey = generatedRevoked.plaintext;
@@ -385,6 +385,73 @@ async function main() {
       "a workspace the signed-in user is not a member of is 404",
       foreignKeyList.status === 404,
       foreignKeyList.status,
+    );
+
+    console.log("\n9b. scopes are enforced, and are not a tenancy answer");
+    const readOnly = generateApiKey();
+    await db.insert(apiKeys).values({
+      workspaceId: fixture.workspaceId,
+      label: `${MARKER} read only`,
+      keyHash: readOnly.hash,
+      scopes: ["board:read"],
+    });
+    const bearerReadOnly = asKey(readOnly.plaintext);
+
+    const canRead = await bearerReadOnly("/api/v1/board");
+    check("a read-only key can read the board", canRead.status === 200, canRead.status);
+
+    const cannotWrite = await bearerReadOnly("/api/v1/cards", {
+      method: "POST",
+      body: JSON.stringify({
+        column_id: fixture.columnId,
+        title: `${MARKER} should not exist`,
+      }),
+    });
+    check(
+      "and is refused 403 on a write",
+      cannotWrite.status === 403,
+      cannotWrite.status,
+    );
+    check(
+      "with the scope it lacked, not a tenancy answer",
+      (await cannotWrite.json()).error === "insufficient_scope",
+    );
+
+    const wroteAnyway = await db
+      .select({ id: cards.id })
+      .from(cards)
+      .where(
+        and(
+          eq(cards.workspaceId, fixture.workspaceId),
+          eq(cards.title, `${MARKER} should not exist`),
+        ),
+      );
+    check("and wrote nothing", wroteAnyway.length === 0, wroteAnyway);
+
+    // The ordering matters: a scope refusal must not depend on whether the row
+    // exists, or it becomes the enumeration oracle the 404 rule prevents.
+    const foreignAndUnscoped = await bearerReadOnly(
+      `/api/v1/cards/${cardA.id}`,
+      { method: "PATCH", body: JSON.stringify({ title: "pwned" }) },
+    );
+    check(
+      "a write to another tenant's card is 403 on scope, before tenancy is consulted",
+      foreignAndUnscoped.status === 403,
+      foreignAndUnscoped.status,
+    );
+
+    const scopelessKey = generateApiKey();
+    await db.insert(apiKeys).values({
+      workspaceId: fixture.workspaceId,
+      label: `${MARKER} scopeless`,
+      keyHash: scopelessKey.hash,
+      scopes: [],
+    });
+    const noScopes = await asKey(scopelessKey.plaintext)("/api/v1/board");
+    check(
+      "a key with no scopes at all cannot even read",
+      noScopes.status === 403,
+      noScopes.status,
     );
 
     console.log("\n10. assignees cannot be borrowed from another tenant");

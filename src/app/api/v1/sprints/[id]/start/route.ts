@@ -6,8 +6,10 @@ import { logActivity } from "@/lib/api/activity";
 import {
   loadSprintForActor,
   parseIntParam,
+  requireScope,
   resolveActor,
 } from "@/lib/api/guards";
+import { SCOPES } from "@/lib/api/scopes";
 import { badRequest, conflict, notFound, ok, unauthorized } from "@/lib/api/response";
 
 export async function POST(
@@ -16,6 +18,9 @@ export async function POST(
 ) {
   const actor = await resolveActor(request);
   if (!actor) return unauthorized();
+
+  const denied = requireScope(actor, SCOPES.BOARD_WRITE);
+  if (denied) return denied;
 
   const { id } = await context.params;
   const sprintId = parseIntParam(id);

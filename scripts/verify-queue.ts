@@ -71,7 +71,7 @@ async function main() {
         workspaceId: workspace.id,
         label: `${MARKER} scoped`,
         keyHash: scoped.hash,
-        scopes: [],
+        scopes: ["board:read", "board:write"],
       },
     ]);
 

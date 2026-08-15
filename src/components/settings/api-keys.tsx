@@ -15,6 +15,7 @@ type ApiKeyRow = {
   created_at: string;
   last_used_at: string | null;
   created_by: string | null;
+  access: string;
 };
 
 const fetcher = async (url: string): Promise<{ keys: ApiKeyRow[] }> => {
@@ -44,6 +45,7 @@ export function ApiKeys({
   const [issued, setIssued] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
+  const [readOnly, setReadOnly] = useState(false);
 
   const keys = data?.keys ?? [];
 
@@ -54,7 +56,11 @@ export function ApiKeys({
       const response = await fetch("/api/v1/keys", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ workspace_id: workspaceId, label: label.trim() }),
+        body: JSON.stringify({
+          workspace_id: workspaceId,
+          label: label.trim(),
+          read_only: readOnly,
+        }),
       });
       const payload = await response.json().catch(() => null);
       if (!response.ok) {
@@ -64,6 +70,7 @@ export function ApiKeys({
       setIssued(payload.plaintext);
       setCopied(false);
       setLabel("");
+      setReadOnly(false);
       await mutate();
     } catch {
       setError("network_error");
@@ -99,8 +106,8 @@ export function ApiKeys({
         <h2 className="text-base font-medium">API keys</h2>
         <p className="text-muted-foreground text-sm">
           Bearer tokens for the machine API, scoped to {workspaceName} alone. A
-          key can read and write this workspace&apos;s board; it cannot create or
-          revoke keys.
+          key can read this workspace&apos;s board, and write to it unless it was
+          minted read only. No key can create or revoke keys.
         </p>
       </div>
 
@@ -141,6 +148,18 @@ export function ApiKeys({
             className="w-64"
           />
         </div>
+        <label className="flex items-center gap-2 pb-2 text-sm">
+          <input
+            type="checkbox"
+            checked={readOnly}
+            onChange={(event) => setReadOnly(event.target.checked)}
+            className="size-4"
+          />
+          Read only
+          <span className="text-muted-foreground text-xs">
+            (can read the board, cannot change it)
+          </span>
+        </label>
         <Button
           size="sm"
           onClick={create}
@@ -156,6 +175,7 @@ export function ApiKeys({
           <thead className="bg-muted/40 text-muted-foreground text-left text-xs">
             <tr>
               <th className="px-3 py-2 font-medium">Label</th>
+              <th className="px-3 py-2 font-medium">Access</th>
               <th className="px-3 py-2 font-medium">Created</th>
               <th className="px-3 py-2 font-medium">Last used</th>
               <th className="px-3 py-2 font-medium">Status</th>
@@ -166,6 +186,7 @@ export function ApiKeys({
             {keys.map((row) => (
               <tr key={row.id} className="border-t">
                 <td className="px-3 py-2 font-medium">{row.label}</td>
+                <td className="text-muted-foreground px-3 py-2">{row.access}</td>
                 <td className="text-muted-foreground px-3 py-2">
                   {formatDate(row.created_at)}
                 </td>
@@ -211,7 +232,7 @@ export function ApiKeys({
             {keys.length === 0 ? (
               <tr>
                 <td
-                  colSpan={5}
+                  colSpan={6}
                   className="text-muted-foreground px-3 py-6 text-center text-xs"
                 >
                   No keys yet.

@@ -8,9 +8,11 @@ import { logActivity } from "@/lib/api/activity";
 import { assigneeJoin, cardProjection, toApiCard } from "@/lib/api/cards";
 import {
   parseIntParam,
+  requireScope,
   resolveActor,
   resolveWorkspace,
 } from "@/lib/api/guards";
+import { SCOPES } from "@/lib/api/scopes";
 import { badRequest, notFound, ok, unauthorized } from "@/lib/api/response";
 import { readOrder, type OrderScope } from "@/lib/ordering";
 
@@ -32,6 +34,9 @@ const createSchema = z.object({
 export async function GET(request: Request) {
   const actor = await resolveActor(request);
   if (!actor) return unauthorized();
+
+  const denied = requireScope(actor, SCOPES.BOARD_READ);
+  if (denied) return denied;
 
   const url = new URL(request.url);
   const workspace = await resolveWorkspace(
@@ -103,6 +108,9 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const actor = await resolveActor(request);
   if (!actor) return unauthorized();
+
+  const denied = requireScope(actor, SCOPES.BOARD_WRITE);
+  if (denied) return denied;
 
   const parsed = createSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return badRequest("invalid_body", parsed.error.issues);

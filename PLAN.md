@@ -181,7 +181,7 @@
 - [x] Enforce Tenant Rule 2: Fail closed with `404 Not Found` (never 403) on cross-tenant requests.
 - [x] Implement activity logging for machine and human actions.
 - [x] **Verification:** Run cross-tenant checks (byte-identical 404 on invalid vs unauthorized ids).
-  - `pnpm verify:tenant` — 44 checks over HTTP. Stands up a second workspace with its own key,
+  - `pnpm verify:tenant` — 51 checks over HTTP. Stands up a second workspace with its own key,
     then reaches for the first workspace's rows with it: every route 404s, every body is
     byte-identical to a genuinely missing id, and nothing is written. Also covers the
     revoked key, the unknown key, the service key, the `?workspace=` and body-`workspace_id`
@@ -243,8 +243,23 @@
   needs a join to `api_keys` to show something human, which is the same indirection a user
   id already needs.
 
+- `api_keys.scopes` is enforced. `board:read`, `board:write` (which implies read), and
+  `ai:claim`, checked by `requireScope` in `src/lib/api/guards.ts` and applied to all
+  eleven routes. Settings can mint a read-only key, because a scope nobody can choose is
+  the same dead surface under a new name.
+  - **Scope failures are 403, and that does not contradict the 404 rule.** Tenancy answers
+    "does this row exist for you" and must be 404, because separating "absent" from
+    "someone else's" turns sequential ids into a tenant directory. A scope answers "may
+    this credential do this at all" — a fact about the caller's own key that reveals
+    nothing about anyone else's data. The check runs *before* any row is loaded, so a 403
+    can never depend on what exists; `verify:tenant` asserts that a read-only key writing
+    to another tenant's card gets 403 on scope, not 404 on tenancy.
+  - Enforcement is a breaking change for keys minted before it. `scripts/migrate-key-scopes.ts`
+    backfills `[]` to full workspace access, or `ai:claim` for a workspace-less key, and is
+    idempotent. Anything that inserts into `api_keys` directly — the verify scripts, the
+    `ops/README.md` SQL — must now supply scopes.
+
 ### Carried into Phase 5+
-- `api_keys.scopes` grants nothing and is checked nowhere. Enforce it or drop the column.
 - **A key survives its creator's offboarding.** Key auth never touches `workspace_members`;
   it binds to `workspace_id` directly. Delete a person's membership and their keys keep
   full read/write access to the workspace, and `created_by` is `ON DELETE SET NULL`, so

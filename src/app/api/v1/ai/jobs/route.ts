@@ -7,8 +7,10 @@ import { logActivity } from "@/lib/api/activity";
 import {
   loadCardForActor,
   parseIntParam,
+  requireScope,
   resolveActor,
 } from "@/lib/api/guards";
+import { SCOPES } from "@/lib/api/scopes";
 import {
   badRequest,
   conflict,
@@ -72,6 +74,9 @@ export async function GET(request: Request) {
   const actor = await resolveActor(request);
   if (!actor) return unauthorized();
 
+  const denied = requireScope(actor, SCOPES.BOARD_READ);
+  if (denied) return denied;
+
   const url = new URL(request.url);
   const cardId = parseIntParam(url.searchParams.get("card"));
   if (!cardId) return badRequest("card_required");
@@ -96,6 +101,9 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const actor = await resolveActor(request);
   if (!actor) return unauthorized();
+
+  const denied = requireScope(actor, SCOPES.BOARD_WRITE);
+  if (denied) return denied;
 
   const parsed = enqueueSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return badRequest("invalid_body", parsed.error.issues);

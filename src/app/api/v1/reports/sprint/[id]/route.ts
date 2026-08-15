@@ -5,8 +5,10 @@ import { cards, columns } from "@/db/schema";
 import {
   loadSprintForActor,
   parseIntParam,
+  requireScope,
   resolveActor,
 } from "@/lib/api/guards";
+import { SCOPES } from "@/lib/api/scopes";
 import { notFound, ok, unauthorized } from "@/lib/api/response";
 
 /** A card untouched for this long is worth surfacing in a standup. */
@@ -19,6 +21,9 @@ export async function GET(
 ) {
   const actor = await resolveActor(request);
   if (!actor) return unauthorized();
+
+  const denied = requireScope(actor, SCOPES.BOARD_READ);
+  if (denied) return denied;
 
   const { id } = await context.params;
   const sprintId = parseIntParam(id);

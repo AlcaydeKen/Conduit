@@ -14,8 +14,10 @@ import { assigneeJoin, cardProjection, toApiCard } from "@/lib/api/cards";
 import {
   loadCardForActor,
   parseIntParam,
+  requireScope,
   resolveActor,
 } from "@/lib/api/guards";
+import { SCOPES } from "@/lib/api/scopes";
 import { badRequest, notFound, ok, unauthorized } from "@/lib/api/response";
 
 /**
@@ -42,6 +44,9 @@ export async function GET(
 ) {
   const actor = await resolveActor(request);
   if (!actor) return unauthorized();
+
+  const denied = requireScope(actor, SCOPES.BOARD_READ);
+  if (denied) return denied;
 
   const { id } = await context.params;
   const cardId = parseIntParam(id);
@@ -78,6 +83,9 @@ export async function PATCH(
 ) {
   const actor = await resolveActor(request);
   if (!actor) return unauthorized();
+
+  const denied = requireScope(actor, SCOPES.BOARD_WRITE);
+  if (denied) return denied;
 
   const { id } = await context.params;
   const cardId = parseIntParam(id);

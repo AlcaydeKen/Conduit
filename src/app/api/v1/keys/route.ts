@@ -6,6 +6,11 @@ import { apiKeys } from "@/db/schema";
 import { logActivity } from "@/lib/api/activity";
 import { resolveSessionActor, resolveWorkspace } from "@/lib/api/guards";
 import { generateApiKey } from "@/lib/api/keys";
+import {
+  FULL_WORKSPACE_SCOPES,
+  READ_ONLY_SCOPES,
+  describeScopes,
+} from "@/lib/api/scopes";
 import { badRequest, notFound, ok, unauthorized } from "@/lib/api/response";
 import { parseIntParam } from "@/lib/api/guards";
 
@@ -21,6 +26,8 @@ import { parseIntParam } from "@/lib/api/guards";
 const createSchema = z.object({
   workspace_id: z.number().int().positive().optional(),
   label: z.string().trim().min(1).max(120),
+  /** A key that can read the board but change nothing. */
+  read_only: z.boolean().optional(),
 });
 
 export async function GET(request: Request) {
@@ -44,6 +51,7 @@ export async function GET(request: Request) {
       createdAt: apiKeys.createdAt,
       lastUsedAt: apiKeys.lastUsedAt,
       createdBy: apiKeys.createdBy,
+      scopes: apiKeys.scopes,
     })
     .from(apiKeys)
     .where(eq(apiKeys.workspaceId, workspace.id))
@@ -58,6 +66,7 @@ export async function GET(request: Request) {
       created_at: row.createdAt.toISOString(),
       last_used_at: row.lastUsedAt?.toISOString() ?? null,
       created_by: row.createdBy,
+      access: describeScopes(row.scopes),
     })),
   });
 }
@@ -84,11 +93,14 @@ export async function POST(request: Request) {
       label: parsed.data.label,
       keyHash: hash,
       createdBy: actor.userId,
-      scopes: [],
+      scopes: parsed.data.read_only
+        ? READ_ONLY_SCOPES
+        : FULL_WORKSPACE_SCOPES,
     })
     .returning({
       id: apiKeys.id,
       label: apiKeys.label,
+      scopes: apiKeys.scopes,
       createdAt: apiKeys.createdAt,
     });
 
@@ -96,13 +108,15 @@ export async function POST(request: Request) {
     workspaceId: workspace.id,
     actor,
     action: "api_key.create",
-    payload: { key_id: created.id, label: created.label },
+    payload: { key_id: created.id, label: created.label, scopes: created.scopes },
   });
 
   return ok({
     key: {
       id: created.id,
       label: created.label,
+      scopes: created.scopes,
+      access: describeScopes(created.scopes),
       created_at: created.createdAt.toISOString(),
     },
     // The only time this value exists outside the caller's own memory. It is
