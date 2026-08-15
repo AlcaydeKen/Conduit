@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 
 import { db } from "@/db";
@@ -30,8 +30,6 @@ const enqueueSchema = z.object({
   kind: z.enum(CARD_JOB_KINDS),
   input: z.record(z.string(), z.unknown()).optional(),
 });
-
-const OPEN_STATUSES = ["pending", "claimed"] as const;
 
 function toApiJob(row: {
   id: number;
@@ -113,23 +111,14 @@ export async function POST(request: Request) {
   const card = await loadCardForActor(actor, cardId);
   if (!card) return notFound();
 
-  // One open job per card and kind. Without this, a double-click queues two
-  // runs of the same prompt and the second overwrites the first for no reason.
-  const [open] = await db
-    .select({ id: aiJobs.id })
-    .from(aiJobs)
-    .where(
-      and(
-        eq(aiJobs.cardId, cardId),
-        eq(aiJobs.workspaceId, card.workspaceId),
-        eq(aiJobs.kind, kind),
-        inArray(aiJobs.status, [...OPEN_STATUSES]),
-      ),
-    )
-    .limit(1);
-
-  if (open) return conflict("job_already_queued");
-
+  /*
+   * One open job per card and kind, enforced by a partial unique index rather
+   * than by a select-then-insert here. Two clicks that overlap — a fast
+   * double-click, or two people with the same card open — would both see an
+   * empty result and both insert. The database is the only place that check can
+   * be atomic, so the insert simply asks for the row and reads whether it got
+   * one.
+   */
   const [created] = await db
     .insert(aiJobs)
     .values({
@@ -139,7 +128,10 @@ export async function POST(request: Request) {
       status: "pending",
       input: input ?? {},
     })
+    .onConflictDoNothing()
     .returning(jobProjection);
+
+  if (!created) return conflict("job_already_queued");
 
   await logActivity({
     workspaceId: card.workspaceId,

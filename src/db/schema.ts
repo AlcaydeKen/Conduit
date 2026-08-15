@@ -11,6 +11,7 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import type { AdapterAccountType } from "next-auth/adapters";
 
 /* -------------------------------------------------------------------------- */
@@ -365,6 +366,18 @@ export const aiJobs = pgTable(
     index("ai_jobs_claim_idx").on(table.status, table.createdAt),
     index("ai_jobs_workspace_idx").on(table.workspaceId),
     index("ai_jobs_card_idx").on(table.cardId),
+    /**
+     * At most one unfinished job per card and kind, enforced by the database
+     * rather than by a check in the route.
+     *
+     * A select-then-insert cannot do this: two clicks that overlap both see an
+     * empty result and both insert. Partial, so completed and failed jobs
+     * accumulate freely — the constraint is on what is *outstanding*, not on
+     * the card's history.
+     */
+    uniqueIndex("ai_jobs_one_open_per_card_kind_idx")
+      .on(table.cardId, table.kind)
+      .where(sql`status in ('pending', 'claimed')`),
   ],
 );
 

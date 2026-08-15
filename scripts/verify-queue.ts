@@ -9,7 +9,7 @@
  * an expired token is refused, and a replay inside the token's lifetime is a
  * conflict rather than a second write.
  */
-import { asc, eq, inArray, like } from "drizzle-orm";
+import { and, asc, eq, inArray, like } from "drizzle-orm";
 
 import { db } from "@/db";
 import { aiJobs, apiKeys, cards, workspaces } from "@/db/schema";
@@ -117,6 +117,43 @@ async function main() {
         duplicate.status,
       );
 
+      // Sequential rejection is the easy half. A select-then-insert passes the
+      // check above and still lets two overlapping clicks both through, so the
+      // guard has to be exercised concurrently to mean anything.
+      await db.delete(aiJobs).where(eq(aiJobs.id, enqueued.id as number));
+      const [raceA, raceB] = await Promise.all([
+        post("/api/v1/ai/jobs", scoped.plaintext, {
+          card_id: card.id,
+          kind: "draft_card",
+        }),
+        post("/api/v1/ai/jobs", scoped.plaintext, {
+          card_id: card.id,
+          kind: "draft_card",
+        }),
+      ]);
+      const raceStatuses = [raceA.status, raceB.status].sort();
+      check(
+        "two simultaneous clicks yield exactly one 200 and one 409",
+        raceStatuses[0] === 200 && raceStatuses[1] === 409,
+        raceStatuses,
+      );
+
+      const openRows = await db
+        .select({ id: aiJobs.id })
+        .from(aiJobs)
+        .where(
+          and(
+            eq(aiJobs.cardId, card.id),
+            eq(aiJobs.kind, "draft_card"),
+            inArray(aiJobs.status, ["pending", "claimed"]),
+          ),
+        );
+      check(
+        "and exactly one open job exists afterwards",
+        openRows.length === 1,
+        openRows.length,
+      );
+
       const readBack = await fetch(
         `${BASE_URL}/api/v1/ai/jobs?card=${card.id}`,
         { headers: { authorization: `Bearer ${scoped.plaintext}` } },
@@ -124,7 +161,7 @@ async function main() {
       check("GET /ai/jobs?card= is 200", readBack.status === 200, readBack.status);
       check(
         "and returns the job the drawer polls",
-        (await readBack.json()).job?.id === enqueued?.id,
+        (await readBack.json()).job?.id === openRows[0]?.id,
       );
 
       const foreignCard = await post("/api/v1/ai/jobs", scoped.plaintext, {
@@ -150,7 +187,7 @@ async function main() {
       // Leave the queue as the rest of the script expects.
       await db
         .delete(aiJobs)
-        .where(eq(aiJobs.id, enqueued.id as number));
+        .where(and(eq(aiJobs.cardId, card.id), eq(aiJobs.kind, "draft_card")));
     } else {
       console.log("  SKIP  no card in the workspace");
     }

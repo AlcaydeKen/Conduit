@@ -309,7 +309,7 @@
 - [ ] **Verification:** Queue draft job in UI, run n8n workflow, verify card updates
       asynchronously. *(blocked on the two above; the server half is covered by
       `verify:queue`, and no UI yet enqueues a job)*
-  - `pnpm verify:queue` — 36 checks over HTTP. Exactly-once handoff, the poll floor, a
+  - `pnpm verify:queue` — 45 checks over HTTP. Exactly-once handoff, the poll floor, a
     workspace key refused on both endpoints, forged and expired tokens, a token presented
     against another job, the replay conflict, the fencing case below, and the sweeper's
     requeue-then-fail path.
@@ -360,8 +360,15 @@
 - The card drawer now has a "Generate AI draft" button, `POST /api/v1/ai/jobs` to enqueue,
   and `GET /api/v1/ai/jobs?card=` for the drawer to poll. The workspace comes from the card,
   proven in the same statement that loads it — never from the body — because that id is what
-  the result callback's signed token is later minted from. One open job per card and kind,
-  so a double-click cannot queue two runs of the same prompt.
+  the result callback's signed token is later minted from.
+- One open job per card and kind, enforced by a **partial unique index**
+  (`ai_jobs (card_id, kind) WHERE status IN ('pending','claimed')`) plus
+  `onConflictDoNothing`, not by a check in the route. The select-then-insert this replaced
+  was a TOCTOU: two overlapping clicks both saw an empty result and both inserted, so the
+  guard held for sequential clicks and failed for the case it existed for. Partial, so
+  finished jobs accumulate freely — the constraint is on what is outstanding, not on the
+  card's history. `verify:queue` fires two genuinely concurrent requests and asserts exactly
+  one 200, one 409, and one surviving row.
 - A finished job is shown in the drawer, **not** written to the card. A model should not
   silently overwrite a human's description; applying a draft should be a separate,
   deliberate action.
