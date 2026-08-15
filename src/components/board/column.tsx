@@ -15,10 +15,14 @@ export const columnDroppableId = (columnId: number) => `column:${columnId}`;
 export function Column({
   column,
   cards,
+  totalCount,
   onOpenCard,
 }: {
   column: BoardColumn;
+  /** Filtered — what is rendered. */
   cards: BoardCard[];
+  /** Unfiltered. The WIP limit is a property of the column, not of the view. */
+  totalCount: number;
   onOpenCard: (cardId: number) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({
@@ -26,7 +30,8 @@ export function Column({
     data: { type: "column", columnId: column.id },
   });
 
-  const overWip = column.wip_limit !== null && cards.length > column.wip_limit;
+  const filtering = cards.length !== totalCount;
+  const overWip = column.wip_limit !== null && totalCount > column.wip_limit;
 
   return (
     <section className="flex min-h-0 flex-col gap-3">
@@ -38,7 +43,7 @@ export function Column({
             overWip && "text-destructive font-medium",
           )}
         >
-          {cards.length}
+          {filtering ? `${cards.length} of ${totalCount}` : totalCount}
           {column.wip_limit !== null ? ` / ${column.wip_limit}` : ""}
         </span>
       </header>
@@ -59,7 +64,10 @@ export function Column({
           ))}
           {cards.length === 0 ? (
             <li className="text-muted-foreground/60 px-2 py-6 text-center text-xs">
-              Drop cards here
+              {/* A column emptied by a filter is not an empty column, and must
+                  not read as an invitation to drop into something whose real
+                  contents are hidden. */}
+              {totalCount > 0 ? "No cards match" : "Drop cards here"}
             </li>
           ) : null}
         </ul>

@@ -16,11 +16,15 @@ export const BACKLOG_DROPPABLE_ID = "backlog";
 
 export function BacklogRail({
   cards,
+  totalCount,
   collapsed,
   onToggle,
   onOpenCard,
 }: {
+  /** Filtered — what is rendered. */
   cards: BoardCard[];
+  /** Unfiltered, so the rail never under-reports what is parked in it. */
+  totalCount: number;
   collapsed: boolean;
   onToggle: () => void;
   onOpenCard: (cardId: number) => void;
@@ -29,6 +33,9 @@ export function BacklogRail({
     id: BACKLOG_DROPPABLE_ID,
     data: { type: "backlog" },
   });
+
+  const filtering = cards.length !== totalCount;
+  const count = filtering ? `${cards.length} of ${totalCount}` : totalCount;
 
   if (collapsed) {
     return (
@@ -42,7 +49,7 @@ export function BacklogRail({
           <ChevronRight className="size-4" />
         </Button>
         <span className="text-muted-foreground [writing-mode:vertical-rl] text-xs">
-          Backlog · {cards.length}
+          Backlog · {count}
         </span>
       </aside>
     );
@@ -54,7 +61,7 @@ export function BacklogRail({
         <h3 className="text-sm font-medium">
           Backlog
           <span className="text-muted-foreground ml-1.5 text-xs tabular-nums">
-            {cards.length}
+            {count}
           </span>
         </h3>
         <Button
@@ -83,7 +90,9 @@ export function BacklogRail({
           ))}
           {cards.length === 0 ? (
             <li className="text-muted-foreground/60 px-2 py-6 text-center text-xs">
-              Backlog is empty. Drag a card here to pull it out of the sprint.
+              {totalCount > 0
+                ? "No backlog cards match the filter."
+                : "Backlog is empty. Drag a card here to pull it out of the sprint."}
             </li>
           ) : null}
         </ul>

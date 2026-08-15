@@ -1,7 +1,7 @@
 # Implementation Roadmap: Conduit
 
 > **Current Phase:** Phase 4: Machine API & Tenant Isolation
-> **Status:** Phases 1–2 complete. Phase 3 complete except card filtering.
+> **Status:** Phases 1–3 complete.
 > **Reference Spec:** See `SPEC.md` for schema, security rules, and endpoints.
 
 ---
@@ -83,16 +83,27 @@
 ## Phase 3: Backlog & Sprint Management
 - [x] Build Backlog view and UI for moving cards between backlog and sprints.
 - [x] Implement Sprint management UI (Create, Start, Complete sprints).
-- [ ] Build card filtering by column, assignee, and priority. *(not requested in the
-      Phase 3 instruction; the only item left before Phase 3 closes)*
+- [x] Build card filtering by column, assignee, and priority. Filtering is a render-time
+      derivation only: the full board payload stays whole in memory, and a drop is still
+      resolved against the unfiltered list. Anything else silently corrupts ordering —
+      see the Phase 3 notes.
 - [x] **Verification:** `pnpm build` succeeds without type errors.
   - `pnpm verify:ordering` — 14 checks, now including board/backlog scope independence.
   - `pnpm verify:sprints` — 25 checks over HTTP: create, validation, the one-active-sprint
     rule, byte-identical 404s on unknown sprint ids, a card dragged to the backlog and back,
     completion with carry-over, and the double-complete and carry-to-self refusals.
   - `pnpm verify:api` — 15 checks, re-run after the move endpoint was reworked.
+  - `pnpm verify:filters` — 31 checks. Pure functions, so it needs neither the dev server
+    nor the database. Proves the filter predicates, and proves that a drop under a filter
+    hands the server a pair that is *adjacent in the full list* — including that the pair
+    the visible list would have produced is not.
   - Browser: card dragged into the backlog rail and back, sprint created through the form,
     and the 409 surfaced as readable copy rather than a raw status.
+  - Browser, filtering: with two of four cards hidden in a column, a card dropped on the
+    last visible one landed at `a3V`, strictly between the hidden `a3` and the visible
+    `a4`; the hidden rows kept their keys. Dragged to the backlog and back under the same
+    filter. Created a sprint with a filter active — the dialog closed, the navigation
+    landed, and the filter survived it.
 
 ### Phase 3 notes
 - Position keys are scoped to what is displayed together, not to a column. A column holds
@@ -111,6 +122,28 @@
   browser, not by any type or lint check.
 - base-ui triggers ignore synthetic `.click()`. Browser checks against dialogs and selects
   need real pointer events, or they report a false failure.
+- A filter must never reach the move path. A move sends neighbour ids, and nothing
+  downstream requires them to be adjacent: `cards/[id]/move` checks only that both
+  neighbours exist and sit in the destination scope, and `computePosition` only refuses
+  when `prev >= next`. So a pair taken from a filtered list is accepted, and the card
+  lands at an arbitrary point inside the hidden run. Measured: with `a0 a1 a2 a3` and the
+  middle two hidden, the visible pair mints exactly `a1` — a duplicate of a hidden row,
+  re-arming the Phase 2 trap. `resolveDrop` therefore takes the unfiltered list, and
+  `verify:filters` asserts the resulting pair is adjacent for every drop target.
+- The filter anchors to the card under the pointer, so a drop "between" two visible cards
+  lands past the whole hidden run rather than before it. Anchoring to the visible card
+  above would be equally well defined but would stop matching an unfiltered drag; both
+  yield an adjacent pair, which is the property that matters.
+- Filter state is `useState`, deliberately not a URL param. Putting it in the URL means a
+  `router.replace` per chip, and that re-runs the page server component — a database
+  round-trip to re-render a list the client already holds.
+- Column and rail counts read `visible / total`, and a WIP breach is computed from the
+  total. A filter that could switch off a WIP warning would be a filter that lies.
+- `DndContext` now has an explicit `id`. dnd-kit's fallback comes from a module-global
+  counter that survives between requests on the server, so the `aria-describedby` it
+  stamps on every card drifted out of step with the client's and failed hydration.
+  Pre-existing and dev-only — confirmed against the previous commit, where the server was
+  handing out `-3` while the client sat at `-2`.
 
 ---
 

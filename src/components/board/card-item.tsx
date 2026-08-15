@@ -6,10 +6,11 @@ import { MessageSquare } from "lucide-react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
+import { initialsOf } from "@/lib/board-filters";
 import { cn } from "@/lib/utils";
 import type { BoardCard, Priority } from "@/types/board";
 
-const PRIORITY_STYLES: Record<Priority, string> = {
+export const PRIORITY_STYLES: Record<Priority, string> = {
   low: "border-slate-300 text-slate-600 dark:border-slate-700 dark:text-slate-400",
   medium: "border-sky-300 text-sky-700 dark:border-sky-800 dark:text-sky-400",
   high: "border-amber-300 text-amber-700 dark:border-amber-800 dark:text-amber-400",
@@ -25,12 +26,7 @@ export function CardFace({
   dragging?: boolean;
   className?: string;
 }) {
-  const initials = (card.assignee?.name ?? "?")
-    .split(" ")
-    .map((part) => part[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
+  const initials = initialsOf(card.assignee?.name ?? null);
 
   return (
     <div

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   DndContext,
@@ -21,6 +21,7 @@ import {
 import { CardFace } from "@/components/board/card-item";
 import { CardPanel } from "@/components/board/card-panel";
 import { Column } from "@/components/board/column";
+import { FilterBar } from "@/components/board/filter-bar";
 import { SprintControls } from "@/components/board/sprint-controls";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -30,6 +31,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { resolveDrop } from "@/lib/board-drop";
+import {
+  EMPTY_FILTERS,
+  filterCards,
+  visibleColumns,
+  type CardFilters,
+} from "@/lib/board-filters";
 import type {
   BoardCard,
   BoardPayload,
@@ -67,6 +75,7 @@ export function Board({
   const [activeId, setActiveId] = useState<number | null>(null);
   const [openCardId, setOpenCardId] = useState<number | null>(null);
   const [railCollapsed, setRailCollapsed] = useState(false);
+  const [filters, setFilters] = useState<CardFilters>(EMPTY_FILTERS);
   const [error, setError] = useState<string | null>(null);
 
   const workspaceParam = searchParams.get("workspace");
@@ -80,6 +89,10 @@ export function Board({
     return query ? `/api/v1/board?${query}` : "/api/v1/board";
   }, [workspaceParam, sprintParam]);
 
+  // Filters are view state, not fetch state: they are deliberately absent from
+  // `key` above and from the URL. A chip toggle must not refetch the board, and
+  // must not call router.replace — that re-runs the page server component and
+  // costs a database round-trip per click.
   const { data, mutate } = useSWR<BoardPayload>(key, fetcher, {
     refreshInterval: POLL_INTERVAL_MS,
     fallbackData: initialBoard,
@@ -88,11 +101,24 @@ export function Board({
   });
 
   const board = data ?? initialBoard;
+
+  // Column ids and user ids are scoped to one workspace. Carrying a filter
+  // across a switch would match nothing and read as an empty board.
+  const workspaceId = board.workspace.id;
+  useEffect(() => {
+    setFilters(EMPTY_FILTERS);
+  }, [workspaceId]);
+
   const groups = useMemo(() => groupByColumn(board), [board]);
   const viewingBacklog = board.selected_sprint === "backlog";
   const selectedSprint =
     board.sprints.find((sprint) => sprint.id === board.selected_sprint) ?? null;
 
+  /**
+   * Unfiltered on purpose. `handleDragEnd` resolves the moving card from here,
+   * and `CardPanel` resolves the open card from here — a filtered list would
+   * break a drag mid-flight and blank the panel of a card the user just hid.
+   */
   const allCards = useMemo(
     () => [...board.cards, ...board.backlog],
     [board.cards, board.backlog],
@@ -100,6 +126,30 @@ export function Board({
   const activeCard = activeId
     ? (allCards.find((card) => card.id === activeId) ?? null)
     : null;
+
+  // Everything below is render-only derivation. Nothing in the move path reads it.
+  const shownColumns = useMemo(
+    () => visibleColumns(board.columns, filters),
+    [board.columns, filters],
+  );
+  const shownGroups = useMemo(() => {
+    const next = new Map<number, BoardCard[]>();
+    for (const [columnId, list] of groups) {
+      next.set(columnId, filterCards(list, filters));
+    }
+    return next;
+  }, [groups, filters]);
+  const shownBacklog = useMemo(
+    () => filterCards(board.backlog, filters),
+    [board.backlog, filters],
+  );
+
+  const totalCount = board.cards.length + board.backlog.length;
+  const visibleCount =
+    shownColumns.reduce(
+      (sum, column) => sum + (shownGroups.get(column.id)?.length ?? 0),
+      0,
+    ) + (viewingBacklog ? 0 : shownBacklog.length);
 
   const sensors = useSensors(
     // A small threshold so a plain click still opens the detail panel instead
@@ -150,45 +200,34 @@ export function Board({
         : (board.selected_sprint as number);
 
     const wasInBacklog = moving.sprint_id === null;
-    const sourceList = wasInBacklog
-      ? [...board.backlog]
-      : [...(groups.get(moving.column_id) ?? [])];
-    const fromIndex = sourceList.findIndex((card) => card.id === movingId);
-    if (fromIndex >= 0) sourceList.splice(fromIndex, 1);
-
     const sameList =
       wasInBacklog === droppedOnBacklog &&
       (droppedOnBacklog || moving.column_id === targetColumnId);
 
-    const targetList = sameList
-      ? sourceList
-      : droppedOnBacklog
-        ? board.backlog.filter((card) => card.id !== movingId)
-        : (groups.get(targetColumnId) ?? []).filter(
-            (card) => card.id !== movingId,
-          );
+    // Both lists come from the unfiltered payload. A filter hides cards; it must
+    // never hide a neighbour, or the server computes a key against the wrong
+    // pair and the card lands inside the hidden run.
+    const sourceList = wasInBacklog
+      ? board.backlog
+      : (groups.get(moving.column_id) ?? []);
+    const fromIndex = sourceList.findIndex((card) => card.id === movingId);
 
-    let toIndex = targetList.length;
-    if (typeof overId !== "string") {
-      const overIndex = targetList.findIndex(
-        (card) => card.id === Number(overId),
-      );
-      if (overIndex >= 0) toIndex = overIndex;
-    }
+    const fullTarget = (
+      droppedOnBacklog ? board.backlog : (groups.get(targetColumnId) ?? [])
+    ).filter((card) => card.id !== movingId);
 
-    if (sameList && toIndex === fromIndex) return;
+    const overCardId = typeof overId === "string" ? null : Number(overId);
+    const { index, prevId, nextId } = resolveDrop(fullTarget, overCardId);
+
+    if (sameList && index === fromIndex) return;
 
     const movedCard: BoardCard = {
       ...moving,
       column_id: targetColumnId,
       sprint_id: targetSprintId,
     };
-    const nextTarget = [...targetList];
-    nextTarget.splice(toIndex, 0, movedCard);
-
-    // Neighbours, not a position. The server owns key generation.
-    const prevCard = nextTarget[toIndex - 1] ?? null;
-    const nextCard = nextTarget[toIndex + 1] ?? null;
+    const nextTarget = [...fullTarget];
+    nextTarget.splice(index, 0, movedCard);
 
     const optimistic = buildOptimistic(
       board,
@@ -209,8 +248,9 @@ export function Board({
             body: JSON.stringify({
               column_id: targetColumnId,
               sprint_id: targetSprintId,
-              prev_card_id: prevCard?.id ?? null,
-              next_card_id: nextCard?.id ?? null,
+              // Neighbours, not a position. The server owns key generation.
+              prev_card_id: prevId,
+              next_card_id: nextId,
             }),
           });
           if (!response.ok) throw new Error(`move_failed_${response.status}`);
@@ -318,11 +358,26 @@ export function Board({
         ) : null}
       </div>
 
+      <FilterBar
+        columns={board.columns}
+        cards={allCards}
+        filters={filters}
+        onChange={setFilters}
+        visibleCount={visibleCount}
+        totalCount={totalCount}
+      />
+
       {selectedSprint?.goal ? (
         <p className="text-muted-foreground text-sm">{selectedSprint.goal}</p>
       ) : null}
 
       <DndContext
+        // Pinned. dnd-kit's fallback id comes from a module-global counter that
+        // keeps incrementing across renders — on the server it survives between
+        // requests — so the `aria-describedby` it writes onto every card drifts
+        // out of step with the client's and fails hydration. Pre-existing, and
+        // only visible in dev, but a real mismatch either way.
+        id="board"
         sensors={sensors}
         collisionDetection={closestCorners}
         onDragStart={(event: DragStartEvent) =>
@@ -334,7 +389,8 @@ export function Board({
         <div className="flex items-start gap-4">
           {viewingBacklog ? null : (
             <BacklogRail
-              cards={board.backlog}
+              cards={shownBacklog}
+              totalCount={board.backlog.length}
               collapsed={railCollapsed}
               onToggle={() => setRailCollapsed((value) => !value)}
               onOpenCard={setOpenCardId}
@@ -342,11 +398,12 @@ export function Board({
           )}
 
           <div className="grid flex-1 items-start gap-4 md:grid-cols-2 xl:grid-cols-4">
-            {board.columns.map((column) => (
+            {shownColumns.map((column) => (
               <Column
                 key={column.id}
                 column={column}
-                cards={groups.get(column.id) ?? []}
+                cards={shownGroups.get(column.id) ?? []}
+                totalCount={groups.get(column.id)?.length ?? 0}
                 onOpenCard={setOpenCardId}
               />
             ))}
@@ -371,7 +428,7 @@ export function Board({
  * Rebuilds the payload with the card in its new home so the drag lands
  * instantly. `position` is deliberately left stale — nothing renders from it,
  * the lists are drawn in array order, and the server's key arrives on
- * revalidation.
+ * revalidation. The payload stays whole; the filter is applied downstream.
  */
 function buildOptimistic(
   board: BoardPayload,

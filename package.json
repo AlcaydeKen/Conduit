@@ -14,6 +14,7 @@
     "db:seed": "tsx --env-file=.env.local src/db/seed.ts",
     "verify:ordering": "tsx --env-file=.env.local scripts/verify-ordering.ts",
     "verify:api": "tsx --env-file=.env.local scripts/verify-api.ts",
+    "verify:filters": "tsx scripts/verify-filters.ts",
     "verify:sprints": "tsx --env-file=.env.local scripts/verify-sprints.ts"
   },
   "dependencies": {
