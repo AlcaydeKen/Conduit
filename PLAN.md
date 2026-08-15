@@ -93,10 +93,11 @@
     rule, byte-identical 404s on unknown sprint ids, a card dragged to the backlog and back,
     completion with carry-over, and the double-complete and carry-to-self refusals.
   - `pnpm verify:api` — 15 checks, re-run after the move endpoint was reworked.
-  - `pnpm verify:filters` — 31 checks. Pure functions, so it needs neither the dev server
-    nor the database. Proves the filter predicates, and proves that a drop under a filter
+  - `pnpm verify:filters` — 38 checks. Pure functions, so it needs neither the dev server
+    nor the database. Proves the filter predicates, proves that a drop under a filter
     hands the server a pair that is *adjacent in the full list* — including that the pair
-    the visible list would have produced is not.
+    the visible list would have produced is not — and proves no legal move can hide a card
+    that was visible.
   - Browser: card dragged into the backlog rail and back, sprint created through the form,
     and the 409 surfaced as readable copy rather than a raw status.
   - Browser, filtering: with two of four cards hidden in a column, a card dropped on the
@@ -143,7 +144,31 @@
   counter that survives between requests on the server, so the `aria-describedby` it
   stamps on every card drifted out of step with the client's and failed hydration.
   Pre-existing and dev-only — confirmed against the previous commit, where the server was
-  handing out `-3` while the client sat at `-2`.
+  handing out `-3` while the client sat at `-2`. Note `useUniqueId(prefix, value)` returns
+  `value` verbatim, so the attribute becomes `"board"`, not `"DndDescribedBy-board"`.
+- There is deliberately no "your card is now hidden" notice, because a visible card cannot
+  be dragged out of sight. To be dragged at all it must be visible, so `matchesCard` is
+  already true and its column is rendered; a move changes only `column_id` and `sprint_id`,
+  never priority or assignee; and the only drop targets are columns the filter is showing,
+  or the rail, which the column filter never touches. Written and then reverted once —
+  `verify:filters` now asserts the invariant across every filter shape and destination, so
+  if a future filter dimension keys on something a move *can* change, the check fails and
+  the notice becomes necessary.
+
+### Carried into Phase 4
+- **`DndContext` renders no accessibility DOM on the board page.** Every card carries
+  `aria-describedby="board"`, and no element with that id exists, so screen readers get no
+  drag instructions. Measured, not inferred: no `display:none` div, no `[aria-live]`, no
+  `[role="status"]`, and the instruction string is absent from `innerHTML`.
+  Not dnd-kit's fault and not caused by the `id` pin — a throwaway route with a bare
+  `DndContext` renders `#DndDescribedBy-0` plus `#DndLiveRegion-0` correctly, and still
+  does after being given the board's exact `id` / `sensors` / `collisionDetection` /
+  handler / `DragOverlay` configuration, where the target resolves as `<div id="board">`.
+  So the suppression comes from something in the board page's composition — the `Suspense`
+  boundary, SWR, or the card panel — and `Accessibility` bails at its only `return null`,
+  meaning `mounted` never flips. Do not paper over this by hand-rendering a
+  `<div id="board">`: dnd-kit renders its own element with that exact id, so the two would
+  collide the moment the underlying cause is fixed.
 
 ---
 

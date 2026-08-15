@@ -127,6 +127,69 @@ function main() {
     matchesCard(sample[0], filters({ columns: [999] })),
   );
 
+  console.log("\n2b. a visible card cannot be dragged out of sight");
+  // Worth stating as a check rather than a comment. It is the reason there is
+  // no "your card is now hidden" notice: to be dragged at all a card must be
+  // visible, a move changes only column_id and sprint_id, and the only drop
+  // targets are columns that the filter is already showing. If a future filter
+  // dimension keys on something a move *can* change, this check fails and the
+  // notice becomes necessary.
+  const columnIds = [1, 2, 3, 4];
+  const population = [
+    card(50, { priority: "low", columnId: 1, assignee: ana }),
+    card(51, { priority: "urgent", columnId: 2, assignee: null }),
+    card(52, { priority: "high", columnId: 3, assignee: bo }),
+    card(53, { priority: "medium", columnId: 4, assignee: ana }),
+  ];
+  const everyFilter = [
+    EMPTY_FILTERS,
+    filters({ priorities: ["low", "urgent"] }),
+    filters({ assignees: [ana.id, UNASSIGNED] }),
+    filters({ columns: [1, 2] }),
+    filters({ priorities: ["low"], columns: [1], assignees: [ana.id] }),
+  ];
+
+  let stayedVisible = true;
+  for (const active of everyFilter) {
+    const shownIds = visibleColumns(
+      columnIds.map((id) => ({ id, name: `c${id}`, position: id, wip_limit: null })),
+      active,
+    ).map((column) => column.id);
+
+    for (const original of population) {
+      const wasVisible =
+        matchesCard(original, active) && shownIds.includes(original.column_id);
+      if (!wasVisible) continue;
+
+      // Every legal destination: any shown column, or the backlog.
+      for (const destination of [...shownIds, null]) {
+        const moved: BoardCard = {
+          ...original,
+          column_id: destination ?? original.column_id,
+          sprint_id: destination === null ? null : original.sprint_id,
+        };
+        const stillVisible =
+          matchesCard(moved, active) &&
+          (destination === null || shownIds.includes(moved.column_id));
+        if (!stillVisible) {
+          stayedVisible = false;
+          console.error("    became hidden:", { original, active, destination });
+        }
+      }
+    }
+  }
+  check("no legal move can hide a card that was visible", stayedVisible);
+  check(
+    "the load-bearing part: a move never touches priority or assignee",
+    ["priority", "assignee"].every(
+      (field) =>
+        population[0][field as "priority" | "assignee"] ===
+        ({ ...population[0], column_id: 9, sprint_id: null } as BoardCard)[
+          field as "priority" | "assignee"
+        ],
+    ),
+  );
+
   console.log("\n3. column visibility");
   const columns: BoardColumn[] = [
     { id: 1, name: "Todo", position: 1, wip_limit: null },
