@@ -109,6 +109,11 @@ export function ApiKeys({
           key can read this workspace&apos;s board, and write to it unless it was
           minted read only. No key can create or revoke keys.
         </p>
+        <p className="text-muted-foreground text-sm">
+          A key you create carries <em>your</em> access, so it stops working the
+          moment you stop being a member of this workspace — nothing to remember
+          on the way out.
+        </p>
       </div>
 
       {issued ? (

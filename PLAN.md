@@ -265,14 +265,22 @@
     `ops/README.md` SQL — must now supply scopes.
 
 ### Carried into Phase 5+
-- **A key survives its creator's offboarding.** Key auth never touches `workspace_members`;
-  it binds to `workspace_id` directly. Delete a person's membership and their keys keep
-  full read/write access to the workspace, and `created_by` is `ON DELETE SET NULL`, so
-  deleting the user row leaves the key with no creator at all. There is no member management
-  endpoint yet, so removal is a manual database operation — which means nothing today can
-  even trigger a cleanup hook. Decide deliberately whether a key is a workspace-scoped
-  credential (current model, revoked only in settings) or a delegation of its creator's
-  access (revoke on membership loss). Do not leave it accidental.
+- **A key is a delegation of its creator's access, decided rather than inherited.** Key
+  authentication now carries an `EXISTS` against `workspace_members` for `created_by`, in
+  the same statement that looks the key up, so removing someone from a workspace stops
+  every key they minted on the next request.
+  - The alternative — revoking keys from a membership-removal handler — cannot work here:
+    there is no member-management endpoint, so removal is a manual `DELETE`, and a cleanup
+    hook would sit in a function nothing calls. Putting the question inside authentication
+    is the only version that cannot be skipped, whatever route the removal takes.
+  - Nothing is written on removal. `revoked` stays false and membership is the source of
+    truth, so restoring a membership restores the keys — verified. A key that was
+    deliberately revoked stays revoked, because that is a separate column.
+  - `created_by IS NULL` is the explicit carve-out: keys minted outside the UI by whoever
+    has database access — the n8n claim key, verification fixtures — have no person behind
+    them to offboard. Anyone able to insert such a row already has more than the key grants.
+  - Cost: one `EXISTS` on a primary-key index per machine request, folded into the existing
+    statement rather than added as a second round trip.
 - `activity` is write-only. Nothing reads it, so the audit trail cannot yet contradict
   anyone — including the impersonation case above, whose one contradicting record is the
   `api_key.create` row.

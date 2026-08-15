@@ -454,6 +454,98 @@ async function main() {
       noScopes.status,
     );
 
+    console.log("\n9c. a key dies with its creator's membership");
+    // The offboarding case. There is no member-management endpoint, so removal
+    // is a plain DELETE — which is exactly why this has to be enforced by
+    // authentication rather than by a cleanup hook nothing would call.
+    const delegated = generateApiKey();
+    await db.insert(apiKeys).values({
+      workspaceId: fixture.workspaceId,
+      label: `${MARKER} delegated`,
+      keyHash: delegated.hash,
+      createdBy: user.id,
+      scopes: ["board:read", "board:write"],
+    });
+    await db
+      .insert(workspaceMembers)
+      .values({ workspaceId: fixture.workspaceId, userId: user.id })
+      .onConflictDoNothing();
+
+    const whileMember = await asKey(delegated.plaintext)("/api/v1/board");
+    check(
+      "while its creator is a member, the key works",
+      whileMember.status === 200,
+      whileMember.status,
+    );
+
+    await db
+      .delete(workspaceMembers)
+      .where(
+        and(
+          eq(workspaceMembers.workspaceId, fixture.workspaceId),
+          eq(workspaceMembers.userId, user.id),
+        ),
+      );
+
+    const afterRemoval = await asKey(delegated.plaintext)("/api/v1/board");
+    check(
+      "removing the membership stops the key on the next request",
+      afterRemoval.status === 401,
+      afterRemoval.status,
+    );
+    check(
+      "and it is refused as a credential, not as a scope",
+      (await afterRemoval.json()).error === "unauthorized",
+    );
+
+    await db
+      .insert(workspaceMembers)
+      .values({ workspaceId: fixture.workspaceId, userId: user.id })
+      .onConflictDoNothing();
+    const afterRestore = await asKey(delegated.plaintext)("/api/v1/board");
+    check(
+      "restoring the membership brings it back — the key was never mutated",
+      afterRestore.status === 200,
+      afterRestore.status,
+    );
+
+    const [stillActive] = await db
+      .select({ revoked: apiKeys.revoked })
+      .from(apiKeys)
+      .where(eq(apiKeys.keyHash, delegated.hash))
+      .limit(1);
+    check(
+      "and `revoked` was never written — membership is the source of truth",
+      stillActive?.revoked === false,
+      stillActive,
+    );
+
+    // A key minted outside the UI has no creator to offboard.
+    const ownerless = generateApiKey();
+    await db.insert(apiKeys).values({
+      workspaceId: fixture.workspaceId,
+      label: `${MARKER} ownerless`,
+      keyHash: ownerless.hash,
+      scopes: ["board:read"],
+    });
+    const ownerlessResponse = await asKey(ownerless.plaintext)("/api/v1/board");
+    check(
+      "a key with no creator is unaffected by anyone's membership",
+      ownerlessResponse.status === 200,
+      ownerlessResponse.status,
+    );
+
+    // Put tenant B back to having no human members — later checks depend on the
+    // signed-in user being a stranger to it.
+    await db
+      .delete(workspaceMembers)
+      .where(
+        and(
+          eq(workspaceMembers.workspaceId, fixture.workspaceId),
+          eq(workspaceMembers.userId, user.id),
+        ),
+      );
+
     console.log("\n10. assignees cannot be borrowed from another tenant");
     const foreignAssignee = await bearerB(`/api/v1/cards`, {
       method: "POST",

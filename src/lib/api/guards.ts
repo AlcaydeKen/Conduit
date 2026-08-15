@@ -88,11 +88,38 @@ export async function resolveSessionActor(): Promise<Actor | null> {
   };
 }
 
+/**
+ * A key issued through settings is a **delegation of its creator's access**, not
+ * a credential the workspace owns outright.
+ *
+ * So it lives exactly as long as their membership does. Remove someone from
+ * `workspace_members` and every key they minted stops working on the next
+ * request — no cleanup job, no hook, and no members endpoint required. That
+ * last part is the point: there is no member-management route in this system,
+ * so removal happens by hand in SQL, and any design that depended on an
+ * application code path firing would simply not run. Making authentication
+ * itself ask the question is the only version that cannot be skipped.
+ *
+ * `created_by IS NULL` is the deliberate exception — a key minted outside the
+ * UI by whoever has database access, like the n8n claim key or a verification
+ * fixture. There is no person behind it to offboard, so there is no membership
+ * to lose. Anyone able to insert such a row already has more than the key gives
+ * them.
+ */
+const CREATOR_STILL_A_MEMBER = sql`(
+  ${apiKeys.createdBy} IS NULL
+  OR EXISTS (
+    SELECT 1 FROM workspace_members wm
+    WHERE wm.workspace_id = ${apiKeys.workspaceId}
+      AND wm.user_id = ${apiKeys.createdBy}
+  )
+)`;
+
 async function resolveKeyActor(bearer: string): Promise<Actor | null> {
-  // Lookup and touch in one statement. Splitting them would add a round trip to
-  // every machine request for a column nothing reads synchronously. The
-  // `workspace_id IS NOT NULL` predicate is what excludes the service key, and
-  // it lives in the query rather than in a check afterwards.
+  // Lookup, membership test, and touch in one statement. Splitting them would
+  // add round trips to every machine request, and would reintroduce the
+  // fetch-then-check shape the tenant rules exist to forbid. The
+  // `workspace_id IS NOT NULL` predicate is what excludes the service key.
   const [row] = await db
     .update(apiKeys)
     .set({ lastUsedAt: sql`now()` })
@@ -101,6 +128,7 @@ async function resolveKeyActor(bearer: string): Promise<Actor | null> {
         eq(apiKeys.keyHash, hashApiKey(bearer)),
         eq(apiKeys.revoked, false),
         isNotNull(apiKeys.workspaceId),
+        CREATOR_STILL_A_MEMBER,
       ),
     )
     .returning({
