@@ -655,6 +655,58 @@ async function main() {
       { first: pagedBody.entries?.[0]?.id, second: olderBody.entries?.[0]?.id },
     );
 
+    // The side channel around session-only key management: api_key.create
+    // carries {key_id, label, scopes}, so a key that could read those rows could
+    // rebuild the inventory /api/v1/keys refuses to hand over.
+    const keyEventsForKey = await bearerB(`/api/v1/activity?limit=200`);
+    const keyEventEntries = (await keyEventsForKey.json()).entries ?? [];
+    check(
+      "a key never sees api_key.* events in the log",
+      !keyEventEntries.some((entry: { action: string }) =>
+        entry.action.startsWith("api_key."),
+      ),
+      keyEventEntries
+        .map((entry: { action: string }) => entry.action)
+        .filter((action: string) => action.startsWith("api_key.")),
+    );
+    check(
+      "but still sees ordinary board activity",
+      keyEventEntries.some((entry: { action: string }) =>
+        entry.action.startsWith("card."),
+      ),
+    );
+
+    // ...and the filter must not be over-broad: a member reading their own
+    // workspace's log is exactly who key management should be visible to.
+    const mintedForLog = await withCookie(`/api/v1/keys`, {
+      method: "POST",
+      body: JSON.stringify({
+        workspace_id: tenantA.id,
+        label: `${MARKER} logged key`,
+      }),
+    });
+    check(
+      "a member can still mint a key",
+      mintedForLog.status === 200,
+      mintedForLog.status,
+    );
+
+    const sessionLog = await withCookie(
+      `/api/v1/activity?workspace=${tenantA.id}&limit=200`,
+    );
+    const sessionEntries = (await sessionLog.json()).entries ?? [];
+    check(
+      "and sees the api_key.create event a key is denied",
+      sessionEntries.some(
+        (entry: { action: string; payload?: { label?: string } }) =>
+          entry.action === "api_key.create" &&
+          entry.payload?.label === `${MARKER} logged key`,
+      ),
+      sessionEntries.filter((entry: { action: string }) =>
+        entry.action.startsWith("api_key."),
+      ).length,
+    );
+
     const foreignLog = await bearerA(`/api/v1/activity?workspace=${fixture.workspaceId}`);
     check(
       "another tenant's log is 404, not someone else's history",

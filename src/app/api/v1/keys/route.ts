@@ -22,6 +22,13 @@ import { parseIntParam } from "@/lib/api/guards";
  * not to revoke one. A machine credential that could issue further credentials
  * turns a single leaked key into permanent, self-renewing access, and revoking
  * the original would no longer be enough to end it.
+ *
+ * This restriction is only as good as every *other* way of learning the same
+ * thing. `GET /api/v1/activity` was one: `api_key.create` records
+ * `{key_id, label, scopes}`, so a read-only key could diff creates against
+ * revokes and rebuild the inventory this endpoint withholds. That route now
+ * hides `api_key.*` from key actors. Anything added later that exposes those
+ * rows has to do the same, or this comment becomes decorative again.
  */
 const createSchema = z.object({
   workspace_id: z.number().int().positive().optional(),

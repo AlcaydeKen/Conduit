@@ -181,7 +181,7 @@
 - [x] Enforce Tenant Rule 2: Fail closed with `404 Not Found` (never 403) on cross-tenant requests.
 - [x] Implement activity logging for machine and human actions.
 - [x] **Verification:** Run cross-tenant checks (byte-identical 404 on invalid vs unauthorized ids).
-  - `pnpm verify:tenant` — 58 checks over HTTP. Stands up a second workspace with its own key,
+  - `pnpm verify:tenant` — 74 checks over HTTP. Stands up a second workspace with its own key,
     then reaches for the first workspace's rows with it: every route 404s, every body is
     byte-identical to a genuinely missing id, and nothing is written. Also covers the
     revoked key, the unknown key, the service key, the `?workspace=` and body-`workspace_id`
@@ -300,6 +300,15 @@
   - A deleted user or a deleted key still resolves — as the bare id, or "deleted key". The
     log outlives its subjects on purpose, so an entry is never dropped from history because
     the thing it refers to is gone.
+  - **A key actor never sees `api_key.*` entries.** `/api/v1/keys` is session-only so a
+    machine credential cannot enumerate credentials, and this endpoint would have handed
+    over the same inventory by another route: `api_key.create` carries
+    `{key_id, label, scopes}`, so diffing creates against revokes rebuilds the live list
+    including which key holds write access. The filter is on the read, not on
+    `logActivity`, because a *member* reading the log is exactly who should see who minted
+    what — redacting at write time would destroy that for everyone to withhold it from
+    machines. Both halves are asserted: a key sees no `api_key.*` but still sees `card.*`,
+    and a session sees the `api_key.create` event a key is denied.
 - The `ALLOWED_EMAILS` allowlist is still only enforced in the `signIn` callback, so
   removing an address does not end a live JWT and `updateAge` re-issues on activity. Now
   more visible than it was: a person removed from the allowlist also keeps every API key

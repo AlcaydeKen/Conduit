@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, lt } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, notLike } from "drizzle-orm";
 
 import { db } from "@/db";
 import { activity, apiKeys, cards, users } from "@/db/schema";
@@ -54,6 +54,24 @@ export async function GET(request: Request) {
   );
   const before = parseIntParam(url.searchParams.get("before"));
 
+  /*
+   * A key never sees key management.
+   *
+   * `/api/v1/keys` is session-only so that a machine credential cannot
+   * enumerate credentials — one leaked key must not become a map of every other
+   * key in the workspace. This endpoint would have handed that map over anyway:
+   * `api_key.create` carries `{key_id, label, scopes}`, so diffing creates
+   * against revokes reconstructs the live inventory, complete with which key
+   * holds write access. The restriction on `/keys` would have been decorative.
+   *
+   * The filter is here rather than in `logActivity` because a *member* reading
+   * the audit log should absolutely see who minted what. Redacting at write
+   * time would destroy that for everyone in order to withhold it from machines,
+   * and the whole point of an audit trail is that key management is in it.
+   */
+  const hideKeyAdmin =
+    actor.kind === "key" ? notLike(activity.action, "api_key.%") : undefined;
+
   // Keyset pagination on the primary key. An offset would drift as new rows
   // land, which on an append-only log means silently repeating or skipping
   // entries while someone reads.
@@ -72,6 +90,7 @@ export async function GET(request: Request) {
     .where(
       and(
         eq(activity.workspaceId, workspace.id),
+        hideKeyAdmin,
         before ? lt(activity.id, before) : undefined,
       ),
     )
