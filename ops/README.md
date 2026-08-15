@@ -140,6 +140,14 @@ authenticated (`last_used_at` only moves on a successful authenticate, so it is
 evidence a green n8n execution is not) and what each recent job is doing. That
 is the first thing to run when the canvas and reality disagree.
 
+**`pnpm verify:queue` refuses to run while the queue is not empty**, and that is
+not fussiness. `POST /ai/jobs/claim` hands out the oldest pending job across
+every workspace — correct, since one runner serves all tenants — so the suite
+cannot ask for its own. A run once claimed a card's real queued draft, wrote
+`[queue-verify] model output` over it, and failed its own "the job is one of
+ours" check; the next run passed, because the evidence had been consumed. Let
+outstanding jobs finish before running it.
+
 `pnpm verify:queue` drives all of the above over HTTP — exactly-once handoff,
 the poll floor, token forgery, expiry, replay, and the sweeper — using a
 throwaway service key it cleans up afterwards. Run that before blaming the

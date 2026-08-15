@@ -55,6 +55,18 @@ export async function GET(request: Request) {
   const before = parseIntParam(url.searchParams.get("before"));
 
   /*
+   * `?card=` narrows to one card's history, for the drawer.
+   *
+   * It can only ever narrow. The workspace predicate below is what enforces
+   * tenancy, and it is unconditional — so a card id from another tenant matches
+   * no rows and returns an empty page rather than leaking that the card exists.
+   * That is why this is a plain equality and not a join up to `cards`: there is
+   * nothing for a join to prove that the workspace predicate has not already
+   * settled.
+   */
+  const cardId = parseIntParam(url.searchParams.get("card"));
+
+  /*
    * A key never sees key management.
    *
    * `/api/v1/keys` is session-only so that a machine credential cannot
@@ -91,6 +103,7 @@ export async function GET(request: Request) {
       and(
         eq(activity.workspaceId, workspace.id),
         hideKeyAdmin,
+        cardId ? eq(activity.cardId, cardId) : undefined,
         before ? lt(activity.id, before) : undefined,
       ),
     )

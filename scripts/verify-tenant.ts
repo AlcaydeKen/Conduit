@@ -284,6 +284,11 @@ async function main() {
         { method: "POST", body: JSON.stringify({ body: "pwned" }) },
       ],
       [`/api/v1/reports/sprint/${sprintA.id}`, {}],
+      // `?workspace=` is a hint the key cannot honour. The roster is the one
+      // read that names *people* rather than work, so it gets the same answer
+      // as everything else rather than a friendlier one.
+      [`/api/v1/members?workspace=${tenantA.id}`, {}],
+      [`/api/v1/activity?workspace=${tenantA.id}&card=${cardA.id}`, {}],
       [`/api/v1/sprints/${sprintA.id}/start`, { method: "POST" }],
       [
         `/api/v1/sprints/${sprintA.id}/complete`,
@@ -310,6 +315,35 @@ async function main() {
       "and every cross-tenant 404 body is byte-identical to it",
       bodies.every((body) => body === missingBody),
       { missingBody, distinct: [...new Set(bodies)] },
+    );
+
+    /*
+     * The 404s above are the easy half. These two are the ones a narrowing
+     * parameter invites: ask for your OWN workspace, and name a row belonging
+     * to someone else. There is nothing to refuse — the request is legitimate —
+     * so the only correct answer is that the filter matches nothing.
+     */
+    console.log("\n5b. a narrowing parameter cannot widen the answer");
+    const foreignCardHistory = await bearerB(
+      `/api/v1/activity?card=${cardA.id}&limit=50`,
+    );
+    check(
+      "history for another tenant's card is an empty page, not its rows",
+      foreignCardHistory.status === 200 &&
+        ((await foreignCardHistory.json()).entries as unknown[]).length === 0,
+      foreignCardHistory.status,
+    );
+
+    const ownRoster = await bearerB(`/api/v1/members`);
+    const rosterIds = ((await ownRoster.json()).members as { id: string }[]).map(
+      (person) => person.id,
+    );
+    check(
+      "B's roster holds B's member and not A's",
+      ownRoster.status === 200 &&
+        rosterIds.includes(tenantBUser.id) &&
+        !rosterIds.includes(user.id),
+      rosterIds,
     );
 
     console.log("\n6. nothing was written");

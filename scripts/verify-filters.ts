@@ -127,6 +127,54 @@ function main() {
     matchesCard(sample[0], filters({ columns: [999] })),
   );
 
+  console.log("\n2a. search");
+  const searchable = [
+    { ...card(10), title: "Wire the machine API key table" },
+    { ...card(11), title: "Sprint report", description: "Points by ASSIGNEE" },
+    { ...card(12), title: "Untitled", description: null },
+  ];
+  check(
+    "an empty query is not a filter",
+    !isFiltering(filters({ query: "" })) &&
+      !isFiltering(filters({ query: "   " })),
+  );
+  check(
+    "matches the title, case-insensitively",
+    filterCards(searchable, filters({ query: "API KEY" }))
+      .map((item) => item.id)
+      .join(",") === "10",
+  );
+  check(
+    "matches the description too",
+    filterCards(searchable, filters({ query: "assignee" }))
+      .map((item) => item.id)
+      .join(",") === "11",
+  );
+  check(
+    "a null description is not a crash and not a match",
+    filterCards(searchable, filters({ query: "zzz" })).length === 0,
+  );
+  check(
+    "surrounding whitespace is ignored",
+    filterCards(searchable, filters({ query: "  sprint  " }))
+      .map((item) => item.id)
+      .join(",") === "11",
+  );
+  check(
+    "search ANDs with the other dimensions",
+    filterCards(
+      searchable,
+      filters({ query: "e", priorities: ["urgent"] }),
+    ).length === 0,
+  );
+  // A query spanning the title/description boundary must not match. The two are
+  // joined for the scan, and joining them with an empty string would let
+  // "tableSprint" match across a seam that does not exist in the data.
+  check(
+    "a match cannot straddle title and description",
+    filterCards(searchable, filters({ query: "reportPoints" })).length === 0,
+  );
+
   console.log("\n2b. a visible card cannot be dragged out of sight");
   // Worth stating as a check rather than a comment. It is the reason there is
   // no "your card is now hidden" notice: to be dragged at all a card must be
@@ -147,6 +195,12 @@ function main() {
     filters({ assignees: [ana.id, UNASSIGNED] }),
     filters({ columns: [1, 2] }),
     filters({ priorities: ["low"], columns: [1], assignees: [ana.id] }),
+    // Search belongs in this list precisely because of the comment above: it is
+    // a new dimension, and the check only means something if every dimension is
+    // in it. A query keys on title and description, which a move cannot change,
+    // so the invariant survives — but that has to be demonstrated, not assumed.
+    filters({ query: "Card 5" }),
+    filters({ query: "card 5", columns: [1, 2] }),
   ];
 
   let stayedVisible = true;

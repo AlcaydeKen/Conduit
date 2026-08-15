@@ -166,12 +166,131 @@ async function main() {
     { missingBody, foreignBody },
   );
 
-  // Put it back so repeat runs start from the same place.
+  console.log("\n5. the surfaces the browser now uses");
+
+  // 5a. The roster the assignee picker is fed.
+  const members = await authed(`/api/v1/members?workspace=${workspace.id}`);
+  check("GET /members is 200", members.status === 200, members.status);
+  const roster = (await members.json()).members as {
+    id: string;
+    name: string | null;
+    role: string;
+  }[];
+  check(
+    "it contains the signed-in user",
+    roster.some((person) => person.id === user.id),
+    roster.map((person) => person.id),
+  );
+  check(
+    "and does not hand out email addresses",
+    roster.every((person) => !("email" in person)),
+    roster[0],
+  );
+
+  // 5b. Create and edit, the two things the UI could not do before.
+  const created = await authed("/api/v1/cards", {
+    method: "POST",
+    body: JSON.stringify({
+      column_id: targetColumn.id,
+      sprint_id: null,
+      title: "[verify-api] throwaway",
+    }),
+  });
+  check("POST /cards is 200", created.status === 200, created.status);
+  const newCard = (await created.json()).card as {
+    id: number;
+    title: string;
+    position: string;
+    priority: string;
+  };
+  check(
+    "the server assigned the position, not the client",
+    typeof newCard.position === "string" && newCard.position.length > 0,
+    newCard.position,
+  );
+  check("and the default priority", newCard.priority === "medium", newCard.priority);
+
+  const edited = await authed(`/api/v1/cards/${newCard.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      title: "[verify-api] renamed",
+      priority: "urgent",
+      points: 5,
+      assignee_id: null,
+    }),
+  });
+  check("PATCH /cards/:id is 200", edited.status === 200, edited.status);
+  const patched = (await edited.json()).card as {
+    title: string;
+    priority: string;
+    points: number | null;
+    position: string;
+  };
+  check("the title changed", patched.title === "[verify-api] renamed", patched.title);
+  check("the priority changed", patched.priority === "urgent", patched.priority);
+  check("points can be set", patched.points === 5, patched.points);
+  check(
+    "and the position is untouched — editing is not moving",
+    patched.position === newCard.position,
+    { before: newCard.position, after: patched.position },
+  );
+
+  // The edit form must never be able to reorder. If PATCH ever starts honouring
+  // these, ordering has two entry points and only one of them generates keys.
+  const smuggled = await authed(`/api/v1/cards/${newCard.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ position: "zzz", column_id: 999999, sprint_id: 999999 }),
+  });
+  const afterSmuggle = await db
+    .select({ position: cards.position, columnId: cards.columnId })
+    .from(cards)
+    .where(eq(cards.id, newCard.id));
+  check(
+    "PATCH ignores position, column_id and sprint_id",
+    afterSmuggle[0]?.position === newCard.position &&
+      afterSmuggle[0]?.columnId === targetColumn.id,
+    { status: smuggled.status, row: afterSmuggle[0] },
+  );
+
+  // 5c. The drawer's history.
+  const cardHistory = await authed(
+    `/api/v1/activity?workspace=${workspace.id}&card=${newCard.id}&limit=25`,
+  );
+  check("GET /activity?card= is 200", cardHistory.status === 200, cardHistory.status);
+  const historyEntries = (await cardHistory.json()).entries as {
+    action: string;
+    card: { id: number } | null;
+  }[];
+  check(
+    "every entry belongs to the card asked for",
+    historyEntries.length > 0 &&
+      historyEntries.every((entry) => entry.card?.id === newCard.id),
+    historyEntries.map((entry) => entry.card?.id),
+  );
+  check(
+    "and the create is in it",
+    historyEntries.some((entry) => entry.action === "card.create"),
+    historyEntries.map((entry) => entry.action),
+  );
+
+  const unknownCardHistory = await authed(
+    `/api/v1/activity?workspace=${workspace.id}&card=999999`,
+  );
+  check(
+    "an unknown card yields an empty page, not an error",
+    unknownCardHistory.status === 200 &&
+      ((await unknownCardHistory.json()).entries as unknown[]).length === 0,
+  );
+
+  // Put everything back so repeat runs start from the same place.
+  await db.delete(cards).where(eq(cards.id, newCard.id));
   await db
     .update(cards)
     .set({ columnId: originalColumnId, position: originalPosition })
     .where(and(eq(cards.id, movingId), eq(cards.workspaceId, workspace.id)));
-  console.log(`\nrestored card #${movingId} to column #${originalColumnId}`);
+  console.log(
+    `\nrestored card #${movingId} to column #${originalColumnId}; removed throwaway card #${newCard.id}`,
+  );
 
   if (failures > 0) {
     console.error(`\n${failures} check(s) failed`);

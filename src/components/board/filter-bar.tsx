@@ -4,12 +4,14 @@ import { PRIORITY_STYLES } from "@/components/board/card-item";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   collectAssignees,
   hasUnassigned,
   initialsOf,
   isFiltering,
   toggleFilter,
+  EMPTY_FILTERS,
   PRIORITIES,
   UNASSIGNED,
   type CardFilters,
@@ -88,6 +90,20 @@ export function FilterBar({
 
   return (
     <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+      {/* No debounce: this filters an array already in memory, so there is no
+          request to throttle and every keystroke is a re-render the board does
+          anyway. `type="search"` gives the native clear affordance for free. */}
+      <Input
+        type="search"
+        value={filters.query}
+        onChange={(event) =>
+          onChange({ ...filters, query: event.target.value })
+        }
+        placeholder="Search cards…"
+        aria-label="Search cards by title or description"
+        className="h-8 w-56"
+      />
+
       <Group label="Priority">
         {PRIORITIES.map((priority) => {
           const selected = filters.priorities.includes(priority);
@@ -169,13 +185,15 @@ export function FilterBar({
           <span className="text-muted-foreground text-xs tabular-nums">
             showing {visibleCount} of {totalCount}
           </span>
+          {/* EMPTY_FILTERS rather than a literal: a hand-written object here
+              would silently stop clearing whichever dimension gets added next,
+              and "Clear" leaving a filter on is the kind of bug nobody reports
+              because they assume they mistyped. */}
           <Button
             variant="ghost"
             size="sm"
             className="h-6 px-2 text-xs"
-            onClick={() =>
-              onChange({ columns: [], assignees: [], priorities: [] })
-            }
+            onClick={() => onChange(EMPTY_FILTERS)}
           >
             Clear
           </Button>

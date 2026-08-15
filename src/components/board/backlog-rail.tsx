@@ -7,6 +7,7 @@ import {
 } from "@dnd-kit/sortable";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
+import { CardComposer } from "@/components/board/card-composer";
 import { SortableCard } from "@/components/board/card-item";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -20,6 +21,7 @@ export function BacklogRail({
   collapsed,
   onToggle,
   onOpenCard,
+  onCreateCard,
 }: {
   /** Filtered — what is rendered. */
   cards: BoardCard[];
@@ -28,6 +30,8 @@ export function BacklogRail({
   collapsed: boolean;
   onToggle: () => void;
   onOpenCard: (cardId: number) => void;
+  /** Creates in the backlog: no sprint, first column. */
+  onCreateCard: (title: string) => Promise<boolean>;
 }) {
   const { setNodeRef, isOver } = useDroppable({
     id: BACKLOG_DROPPABLE_ID,
@@ -97,6 +101,8 @@ export function BacklogRail({
           ) : null}
         </ul>
       </SortableContext>
+
+      <CardComposer label="the backlog" onCreate={onCreateCard} />
     </aside>
   );
 }

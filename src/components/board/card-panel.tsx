@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Loader2, Sparkles } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Loader2, Pencil, Sparkles } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import useSWR from "swr";
@@ -18,7 +18,15 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
-import type { BoardCard, CardComment } from "@/types/board";
+import {
+  ActorCell,
+  activityFetcher,
+  describeAction,
+  toneOf,
+} from "@/components/activity/shared";
+import { CardEditForm } from "@/components/board/card-edit-form";
+import { cn } from "@/lib/utils";
+import type { BoardCard, CardComment, Person } from "@/types/board";
 
 const fetcher = async (url: string) => {
   const response = await fetch(url, { headers: { accept: "application/json" } });
@@ -41,6 +49,12 @@ const jobFetcher = async (url: string) => {
   const response = await fetch(url, { headers: { accept: "application/json" } });
   if (!response.ok) throw new Error(`job_fetch_failed_${response.status}`);
   return response.json() as Promise<{ job: AiJob | null }>;
+};
+
+const membersFetcher = async (url: string) => {
+  const response = await fetch(url, { headers: { accept: "application/json" } });
+  if (!response.ok) throw new Error(`members_fetch_failed_${response.status}`);
+  return response.json() as Promise<{ members: Person[] }>;
 };
 
 const IN_FLIGHT = new Set(["pending", "claimed"]);
@@ -70,15 +84,19 @@ function Prose({ children }: { children: string }) {
 export function CardPanel({
   cardId,
   card,
+  workspaceId,
   onClose,
   onCardChanged,
 }: {
   cardId: number | null;
   card: BoardCard | null;
+  /** Explicit rather than inferred: the roster is per workspace. */
+  workspaceId: number;
   onClose: () => void;
-  /** Lets the board re-read once a job finishes. */
+  /** Lets the board re-read once a job finishes or the card is edited. */
   onCardChanged?: () => void;
 }) {
+  const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -89,6 +107,36 @@ export function CardPanel({
     cardId ? `/api/v1/cards/${cardId}/comments` : null,
     fetcher,
   );
+
+  // Only while the form is open. The roster changes about once a quarter and
+  // there is no reason to fetch it for everyone who merely opens a card.
+  const { data: memberData } = useSWR(
+    editing ? `/api/v1/members?workspace=${workspaceId}` : null,
+    membersFetcher,
+  );
+
+  /*
+   * This card's history. Capped rather than paginated: the drawer answers "what
+   * happened to this card recently", and the settings audit log is where you go
+   * to page through everything.
+   *
+   * No `refreshInterval`. The two things that write history from inside this
+   * panel — a comment and an edit — already revalidate on success, and the
+   * board's 5s poll does not need a third timer behind it.
+   */
+  const { data: historyData, mutate: mutateHistory } = useSWR(
+    cardId
+      ? `/api/v1/activity?workspace=${workspaceId}&card=${cardId}&limit=25`
+      : null,
+    activityFetcher,
+  );
+
+  // Opening a different card must not inherit the previous one's edit mode —
+  // the panel is one component reused for every card, so the state outlives the
+  // card unless something clears it.
+  useEffect(() => {
+    setEditing(false);
+  }, [cardId]);
 
   /**
    * A flat interval, running whenever the drawer is open.
@@ -177,7 +225,7 @@ export function CardPanel({
       });
       if (!response.ok) throw new Error(`comment_failed_${response.status}`);
       setDraft("");
-      await mutate();
+      await Promise.all([mutate(), mutateHistory()]);
     } catch {
       setError("Could not post that comment.");
     } finally {
@@ -213,10 +261,37 @@ export function CardPanel({
             </div>
           ) : null}
 
-          {card?.description ? (
-            <Prose>{card.description}</Prose>
+          {card && editing ? (
+            <CardEditForm
+              card={card}
+              members={memberData?.members ?? []}
+              onSaved={() => {
+                setEditing(false);
+                onCardChanged?.();
+                void mutateHistory();
+              }}
+              onCancel={() => setEditing(false)}
+            />
           ) : (
-            <p className="text-muted-foreground text-sm">No description yet.</p>
+            <div className="space-y-2">
+              {card?.description ? (
+                <Prose>{card.description}</Prose>
+              ) : (
+                <p className="text-muted-foreground text-sm">
+                  No description yet.
+                </p>
+              )}
+              {card ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setEditing(true)}
+                >
+                  <Pencil className="size-3.5" />
+                  Edit
+                </Button>
+              ) : null}
+            </div>
           )}
 
           <section className="space-y-2">
@@ -277,6 +352,42 @@ export function CardPanel({
                 ) : null}
                 <Prose>{draftText}</Prose>
               </div>
+            ) : null}
+          </section>
+
+          <Separator />
+
+          <section className="space-y-2">
+            <h4 className="text-sm font-medium">History</h4>
+            <ul className="space-y-2">
+              {historyData?.entries.map((entry) => (
+                <li
+                  key={entry.id}
+                  className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs"
+                >
+                  <ActorCell actor={entry.actor} />
+                  <Badge
+                    variant="outline"
+                    className={cn("font-normal", toneOf(entry.action))}
+                  >
+                    {describeAction(entry.action)}
+                  </Badge>
+                  <span className="text-muted-foreground tabular-nums">
+                    {new Date(entry.created_at).toLocaleString()}
+                  </span>
+                </li>
+              ))}
+              {historyData && historyData.entries.length === 0 ? (
+                <li className="text-muted-foreground text-xs">
+                  Nothing recorded for this card yet.
+                </li>
+              ) : null}
+            </ul>
+            {historyData?.next_before ? (
+              <p className="text-muted-foreground text-xs">
+                {/* Says so rather than pretending 25 is all of it. */}
+                Showing the 25 most recent — the full trail is in Settings.
+              </p>
             ) : null}
           </section>
 

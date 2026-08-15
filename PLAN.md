@@ -1,9 +1,9 @@
 # Implementation Roadmap: Conduit
 
-> **Current Phase:** Phase 6: Asynchronous AI Queue & n8n
-> **Status:** All six phases complete. The queue has run end to end against a live n8n and
-> Ollama — enqueued from the drawer, claimed, generated, written back on the signed token,
-> and rendered without a reload.
+> **Current Phase:** Phase 7: closing the gap between the API and the UI
+> **Status:** Phases 1–6 complete; the queue has run end to end against a live n8n and
+> Ollama. Phase 7 round 1 is done — the board can now create, edit, search and audit cards
+> from the browser, which it could not before.
 > **Reference Spec:** See `SPEC.md` for schema, security rules, and endpoints.
 
 ---
@@ -461,3 +461,62 @@
   description…" that would have landed in the card. With it on, Ollama separates the two.
 - `pnpm queue:status` is the server's own view: `last_used_at` moves only on a successful
   authenticate, so it is evidence a green n8n execution is not.
+---
+
+## Phase 7: closing the gap between the API and the UI
+
+The audit that started this phase found the barebones feeling was not a missing-features
+problem. `POST /cards`, `PATCH /cards/:id` and `?q=` search were all written, validated and
+tenant-safe, and nothing in `src/components/` called any of them — a human could not add a
+card to their own board without minting an API key.
+
+### Round 1 — done
+
+- [x] Card create: an inline composer in every column header and the backlog rail. Title
+      only; everything else is editable the moment the card exists. No `position` is sent —
+      the create route owns key generation exactly as the move route does.
+- [x] Card edit in place in the drawer: title, description, priority, points, assignee.
+      `PATCH` still refuses `column_id`, `sprint_id` and `position`, so ordering keeps one
+      entry point.
+- [x] `GET /api/v1/members` — read-only, no email. Without it the assignee picker could only
+      offer people who already held cards, which is exactly nobody on a new workspace.
+- [x] Search as a fourth filter dimension, client-side over the loaded payload.
+- [x] `KeyboardSensor`, so the drag announcements written in Phase 3 reach someone who can
+      act on them.
+- [x] Per-card history in the drawer, via `?card=` on the activity route.
+- [x] Collapsible columns, and the column grid became a flex row so collapsing reclaims width.
+- [x] `restrictToWindowEdges` and a drop animation that stops the overlay flickering.
+
+### Notes
+
+- **Search had to be a filter, not a fetch.** A server-backed search returns a *different
+  list of cards*, and a move computed against that list sends neighbour ids that are not
+  neighbours. As a filter it inherits the Phase 3 rule for free: `allCards` stays whole and
+  `resolveDrop` runs against the unfiltered list. `verify:filters` now carries a query in
+  the "no legal move can hide a card" sweep, which is what that check was written for.
+- **`ActorCell` is shared** between the settings audit log and the drawer. It carries a rule,
+  not a layout: a key is shown by id, never by label alone, because a label is free text its
+  creator chose. Two copies would be two places to relax it.
+- **`GET /members` is deliberately not member management.** An API key is a delegation of its
+  creator's membership and expires with it, enforced in `resolveKeyActor` on every
+  authenticate. Adding or removing a member stays a hand-written SQL statement precisely so
+  nothing depends on an application code path having fired.
+- **`verify:queue` was unsafe to run against a live queue, and did real damage.** The claim
+  endpoint hands out the oldest pending job across every workspace — correct, one runner
+  serves all tenants — so the suite cannot ask for its own. A run claimed card #2's real
+  queued draft, wrote `[queue-verify] model output` over it, and failed its own "the job is
+  one of ours" check; the following run passed because the evidence had been consumed. It now
+  refuses to start while any job is outstanding. Aborting rather than draining: draining
+  destroys the same work more politely, and filtering claims client-side cannot help, because
+  by the time a claim returns the job has been handed out and its attempt counter bumped.
+
+### Not done, in priority order
+
+- Labels are still half-built: schema, join table, board payload and both render paths exist,
+  and nothing can create or attach one.
+- No card removal. Archive (`cards.archived_at`), not delete — `comments`, `activity` and
+  `ai_jobs` all reference cards and `activity` cascades.
+- Due dates, column management, checklists. Then swimlanes, bulk actions, a command palette.
+- Column sorting is declined, not deferred: sort order and drag order are the same axis, so a
+  sorted board cannot honour a drop without rewriting the sort key or discarding the drop.
+- Cover images are declined: blob storage that does not exist, on Hobby, for three people.

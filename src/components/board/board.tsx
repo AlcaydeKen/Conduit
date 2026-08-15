@@ -5,13 +5,18 @@ import { useRouter, useSearchParams } from "next/navigation";
 import {
   DndContext,
   DragOverlay,
+  KeyboardSensor,
   PointerSensor,
   closestCorners,
+  defaultDropAnimationSideEffects,
   useSensor,
   useSensors,
   type DragEndEvent,
   type DragStartEvent,
+  type DropAnimation,
 } from "@dnd-kit/core";
+import { restrictToWindowEdges } from "@dnd-kit/modifiers";
+import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import useSWR from "swr";
 
 import {
@@ -46,6 +51,18 @@ import type {
 
 const POLL_INTERVAL_MS = 5_000;
 
+/**
+ * The source card fades to 40% while dragging (`card-item.tsx`). Without this
+ * the overlay snaps back to full opacity at the instant it lands, one frame
+ * before the real card finishes fading in — a flicker that reads as the drop
+ * having failed.
+ */
+const DROP_ANIMATION: DropAnimation = {
+  sideEffects: defaultDropAnimationSideEffects({
+    styles: { active: { opacity: "0.4" } },
+  }),
+};
+
 const fetcher = async (url: string): Promise<BoardPayload> => {
   const response = await fetch(url, { headers: { accept: "application/json" } });
   if (!response.ok) throw new Error(`board_fetch_failed_${response.status}`);
@@ -75,6 +92,9 @@ export function Board({
   const [activeId, setActiveId] = useState<number | null>(null);
   const [openCardId, setOpenCardId] = useState<number | null>(null);
   const [railCollapsed, setRailCollapsed] = useState(false);
+  const [collapsedColumns, setCollapsedColumns] = useState<Set<number>>(
+    () => new Set(),
+  );
   const [filters, setFilters] = useState<CardFilters>(EMPTY_FILTERS);
   const [error, setError] = useState<string | null>(null);
 
@@ -103,11 +123,22 @@ export function Board({
   const board = data ?? initialBoard;
 
   // Column ids and user ids are scoped to one workspace. Carrying a filter
-  // across a switch would match nothing and read as an empty board.
+  // across a switch would match nothing and read as an empty board, and a
+  // carried-over collapsed set would fold whichever columns happened to share
+  // an id with the ones collapsed in the workspace we left.
   const workspaceId = board.workspace.id;
   useEffect(() => {
     setFilters(EMPTY_FILTERS);
+    setCollapsedColumns(new Set());
   }, [workspaceId]);
+
+  function toggleColumn(columnId: number) {
+    setCollapsedColumns((current) => {
+      const next = new Set(current);
+      if (!next.delete(columnId)) next.add(columnId);
+      return next;
+    });
+  }
 
   const groups = useMemo(() => groupByColumn(board), [board]);
   const viewingBacklog = board.selected_sprint === "backlog";
@@ -216,6 +247,16 @@ export function Board({
     // A small threshold so a plain click still opens the detail panel instead
     // of being swallowed as a drag.
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    /*
+     * Space picks a card up, arrows move it, space drops it, escape cancels —
+     * and the announcements above finally have someone who can act on them.
+     * Until now they described a drag to a screen-reader user who had no way to
+     * begin one.
+     *
+     * Known limit: this traverses *sortable items*. A column with no cards is a
+     * droppable with nothing to step onto, so it stays mouse-only.
+     */
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
   function setParam(name: string, value: string | null) {
@@ -224,6 +265,44 @@ export function Board({
     params.set(name, value);
     if (name === "workspace") params.delete("sprint");
     router.replace(`/?${params.toString()}`, { scroll: false });
+  }
+
+  /**
+   * Creates a card at the end of one scope.
+   *
+   * No `position` is sent and no optimistic insert is made. The create route
+   * owns key generation exactly as the move route does — `readOrder` then
+   * `generateKeyBetween(last, null)` — so there is no key the client could
+   * guess, and a placeholder card holding a fabricated one would have to be
+   * reconciled against the real one a moment later.
+   *
+   * `sprintId` null means the backlog. When the backlog itself is the selected
+   * view, a column composer is also creating a backlog card, which is why this
+   * reads `selected_sprint` rather than assuming a sprint is in view.
+   */
+  async function createCard(
+    columnId: number,
+    sprintId: number | null,
+    title: string,
+  ): Promise<boolean> {
+    setError(null);
+    try {
+      const response = await fetch("/api/v1/cards", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          column_id: columnId,
+          sprint_id: sprintId,
+          title,
+        }),
+      });
+      if (!response.ok) throw new Error(`create_failed_${response.status}`);
+      await mutate();
+      return true;
+    } catch {
+      setError("Could not add that card.");
+      return false;
+    }
   }
 
   async function handleDragEnd(event: DragEndEvent) {
@@ -441,6 +520,10 @@ export function Board({
         id="board"
         accessibility={{ announcements }}
         sensors={sensors}
+        // Keeps the overlay inside the viewport. Without it a card dragged past
+        // the edge scrolls the page under the pointer and the drop lands
+        // somewhere the user was no longer looking.
+        modifiers={[restrictToWindowEdges]}
         collisionDetection={closestCorners}
         onDragStart={(event: DragStartEvent) =>
           setActiveId(Number(event.active.id))
@@ -456,23 +539,47 @@ export function Board({
               collapsed={railCollapsed}
               onToggle={() => setRailCollapsed((value) => !value)}
               onOpenCard={setOpenCardId}
+              /* The rail is one flat list, but `cards.column_id` is NOT NULL —
+                 a backlog card still has to sit in some column for when it is
+                 pulled into a sprint. The first column is the honest default:
+                 it is the leftmost, which is where unstarted work belongs. */
+              onCreateCard={(title) =>
+                board.columns[0]
+                  ? createCard(board.columns[0].id, null, title)
+                  : Promise.resolve(false)
+              }
             />
           )}
 
-          <div className="grid flex-1 items-start gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {/* Flex rather than a fixed grid: in `grid-cols-4` a collapsed column
+              still occupies a full track, so collapsing would reclaim nothing.
+              Here an expanded column takes an equal share of what is left and a
+              collapsed one takes 44px. */}
+          <div className="flex flex-1 flex-wrap items-start gap-4">
             {shownColumns.map((column) => (
               <Column
                 key={column.id}
                 column={column}
                 cards={shownGroups.get(column.id) ?? []}
                 totalCount={groups.get(column.id)?.length ?? 0}
+                collapsed={collapsedColumns.has(column.id)}
+                onToggle={() => toggleColumn(column.id)}
                 onOpenCard={setOpenCardId}
+                onCreateCard={(columnId, title) =>
+                  createCard(
+                    columnId,
+                    // Creating while the backlog is in view creates in the
+                    // backlog, not in a sprint that is not on screen.
+                    viewingBacklog ? null : (board.selected_sprint as number),
+                    title,
+                  )
+                }
               />
             ))}
           </div>
         </div>
 
-        <DragOverlay>
+        <DragOverlay dropAnimation={DROP_ANIMATION}>
           {activeCard ? <CardFace card={activeCard} dragging /> : null}
         </DragOverlay>
       </DndContext>
@@ -480,6 +587,7 @@ export function Board({
       <CardPanel
         cardId={openCardId}
         card={allCards.find((card) => card.id === openCardId) ?? null}
+        workspaceId={board.workspace.id}
         onClose={() => setOpenCardId(null)}
         onCardChanged={() => void mutate()}
       />

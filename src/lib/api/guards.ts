@@ -94,11 +94,13 @@ export async function resolveSessionActor(): Promise<Actor | null> {
  *
  * So it lives exactly as long as their membership does. Remove someone from
  * `workspace_members` and every key they minted stops working on the next
- * request — no cleanup job, no hook, and no members endpoint required. That
- * last part is the point: there is no member-management route in this system,
- * so removal happens by hand in SQL, and any design that depended on an
- * application code path firing would simply not run. Making authentication
- * itself ask the question is the only version that cannot be skipped.
+ * request — no cleanup job and no hook.
+ *
+ * That is the point: there is no member-*management* route in this system. The
+ * roster is readable at `GET /api/v1/members`, but adding and removing a member
+ * is a hand-written SQL statement, so any design that depended on an application
+ * code path firing on removal would simply not run. Making authentication itself
+ * ask the question is the only version that cannot be skipped.
  *
  * A missing creator is not a licence, it is a dead key. `created_by` is
  * `ON DELETE SET NULL`, so deleting a person's `users` row nulls it — and an

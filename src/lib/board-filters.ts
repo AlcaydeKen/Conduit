@@ -23,12 +23,15 @@ export type CardFilters = {
   columns: number[];
   assignees: AssigneeFilter[];
   priorities: Priority[];
+  /** Free text over title and description. Empty means no constraint. */
+  query: string;
 };
 
 export const EMPTY_FILTERS: CardFilters = {
   columns: [],
   assignees: [],
   priorities: [],
+  query: "",
 };
 
 export const PRIORITIES: Priority[] = ["low", "medium", "high", "urgent"];
@@ -37,7 +40,8 @@ export function isFiltering(filters: CardFilters): boolean {
   return (
     filters.columns.length > 0 ||
     filters.assignees.length > 0 ||
-    filters.priorities.length > 0
+    filters.priorities.length > 0 ||
+    filters.query.trim().length > 0
   );
 }
 
@@ -69,6 +73,23 @@ export function matchesCard(card: BoardCard, filters: CardFilters): boolean {
     if (!filters.assignees.includes(key)) return false;
   }
 
+  /*
+   * Substring, case-insensitive, over title and description — the same two
+   * fields `GET /api/v1/cards?q=` searches, so the board and the machine API
+   * cannot answer "does this card match" differently.
+   *
+   * Client-side on purpose. This runs over the payload already in memory, so it
+   * needs no request and, more importantly, it stays a render-time derivation
+   * like every other filter here. A server-backed search would return a
+   * *different list of cards*, and a move computed against that list would send
+   * neighbour ids that are not neighbours.
+   */
+  const query = filters.query.trim().toLowerCase();
+  if (query.length > 0) {
+    const haystack = `${card.title}\n${card.description ?? ""}`.toLowerCase();
+    if (!haystack.includes(query)) return false;
+  }
+
   return true;
 }
 
@@ -92,9 +113,11 @@ export function visibleColumns(
 /**
  * The assignees actually present on the board, deduped and sorted by name.
  *
- * There is no endpoint that lists the members of a workspace — `listWorkspaces`
- * is the inverse relation — so the roster is derived from the cards on hand.
- * Nothing is lost: filtering by a member who holds no cards hides nothing.
+ * Derived from the cards on hand rather than from `GET /api/v1/members`, and
+ * that is the right source for a *filter*: offering to filter by someone who
+ * holds no cards would only ever produce an empty board. The members route
+ * exists for the assignee picker, where the opposite is true — you must be able
+ * to give a card to someone who has none.
  */
 export function collectAssignees(cards: BoardCard[]): Person[] {
   const seen = new Map<string, Person>();

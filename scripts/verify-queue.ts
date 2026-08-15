@@ -63,6 +63,56 @@ async function main() {
     .limit(1);
   if (!member) throw new Error("workspace has no members — sign in once first");
 
+  /*
+   * Refuse to run while anyone else's job is outstanding.
+   *
+   * `POST /ai/jobs/claim` hands out the oldest pending job across every
+   * workspace — correct, since one runner serves all tenants — which means this
+   * suite cannot ask for its own. It takes whatever is at the head of the queue
+   * and posts a result to it.
+   *
+   * That is not hypothetical. A run claimed a card's real queued draft and
+   * overwrote it with `[queue-verify] model output`, then failed its own "the
+   * job is one of ours" check — a green suite on the next run, because the
+   * evidence had been consumed. Nothing about the endpoint is wrong; the suite
+   * was assuming an empty queue without ever checking.
+   *
+   * Aborting is the only honest option. Draining the queue would destroy the
+   * same work more politely, and filtering claims client-side cannot help: by
+   * the time a claim returns, the job has already been handed out and its
+   * attempt counter incremented.
+   */
+  const outstanding = await db
+    .select({
+      id: aiJobs.id,
+      status: aiJobs.status,
+      cardId: aiJobs.cardId,
+      kind: aiJobs.kind,
+    })
+    .from(aiJobs)
+    .where(inArray(aiJobs.status, ["pending", "claimed"]));
+
+  if (outstanding.length > 0) {
+    console.error(
+      "refusing to run: the AI queue is not empty.\n\n" +
+        "This suite claims from the shared queue, so it would take these jobs\n" +
+        "and write test results over them:\n",
+    );
+    for (const job of outstanding) {
+      console.error(`  #${job.id} ${job.kind} ${job.status} card=${job.cardId ?? "-"}`);
+    }
+    console.error(
+      "\nLet them finish (or fail them) and run again. If n8n is not running,\n" +
+        "they will sit pending forever — stop the workflow or clear them by hand.",
+    );
+    // `process.exitCode` and return, not `process.exit()`. Tearing the process
+    // down while the Neon HTTP driver still holds a handle trips a libuv
+    // assertion on Windows, so the refusal exits 3221226505 instead of 1 and
+    // reads as a crash rather than a deliberate stop.
+    process.exitCode = 1;
+    return;
+  }
+
   const service = generateApiKey();
   const scoped = generateApiKey();
 
