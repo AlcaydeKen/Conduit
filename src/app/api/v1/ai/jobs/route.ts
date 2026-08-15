@@ -128,7 +128,28 @@ export async function POST(request: Request) {
       cardId,
       kind,
       status: "pending",
-      input: input ?? {},
+      /*
+       * The card's own text is written in here by the server, from the row it
+       * just proved — not accepted from the caller.
+       *
+       * `ai_jobs` rows are self-describing on purpose: the same reason
+       * `workspace_id` sits on the row rather than being joined through
+       * `card_id` at result time. The runner holds a claim-only credential, so
+       * it *cannot* read a card even if it wanted to; an input that omits the
+       * content leaves it prompting a model about a card nobody showed it.
+       *
+       * Caller-supplied keys are kept but cannot shadow these two. A drafted
+       * description that was generated from a title the card does not have is
+       * worse than no draft, and nothing downstream would reveal the swap.
+       */
+      input: {
+        ...(input ?? {}),
+        card: {
+          id: card.id,
+          title: card.title,
+          description: card.description,
+        },
+      },
     })
     .onConflictDoNothing()
     .returning(jobProjection);

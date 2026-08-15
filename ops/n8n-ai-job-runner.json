@@ -124,7 +124,7 @@
         "url": "http://host.docker.internal:11434/api/generate",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ model: 'qwen3:4b', stream: false, prompt: `You are helping run a kanban board. Job kind: ${$json.body.job.kind}.\\n\\nInput:\\n${JSON.stringify($json.body.job.input, null, 2)}\\n\\nRespond with the requested content only.` }) }}",
+        "jsonBody": "={{ JSON.stringify({ model: 'qwen3:4b', stream: false, prompt: `You are helping run a kanban board.\\n\\nCard title: ${$json.body.job.input?.card?.title || '(untitled)'}\\nCurrent description: ${$json.body.job.input?.card?.description || '(empty)'}\\n\\nTask: ${({ draft_card: 'Write a clear description for this card in 2-4 sentences of plain prose. No headings, no markdown, no preamble.', suggest_labels: 'Suggest 3-5 short labels for this card. Reply with a comma-separated list and nothing else.', estimate_points: 'Estimate this card in Fibonacci story points (1, 2, 3, 5, 8, 13). Reply with the number, then one sentence of justification.', split_epic: 'Split this card into 3-6 smaller tasks. Reply as a plain list, one per line, no numbering.' })[$json.body.job.kind] || 'Respond helpfully.'}\\n\\nRespond with the requested content only. Do not restate the task.` }) }}",
         "options": {
           "timeout": 480000,
           "response": {

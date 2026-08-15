@@ -335,6 +335,12 @@ export async function loadCardForActor(actor: Actor, cardId: number) {
     columnId: cards.columnId,
     sprintId: cards.sprintId,
     position: cards.position,
+    // Content, not just placement. Proving a card and then fetching its text in
+    // a second query is the fetch-then-check shape in miniature — the same row
+    // read twice, with only the first read carrying the tenant predicate. Any
+    // caller that reached this function has already earned both.
+    title: cards.title,
+    description: cards.description,
   };
 
   if (actor.kind === "key") {

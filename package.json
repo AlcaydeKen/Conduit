@@ -20,7 +20,8 @@
     "verify:mcp": "tsx --env-file=.env.local scripts/verify-mcp.ts",
     "mcp:build": "pnpm --filter conduit-mcp build",
     "verify:queue": "tsx --env-file=.env.local scripts/verify-queue.ts",
-    "claim-key:mint": "tsx --env-file=.env.local scripts/mint-claim-key.ts"
+    "claim-key:mint": "tsx --env-file=.env.local scripts/mint-claim-key.ts",
+    "queue:status": "tsx --env-file=.env.local scripts/queue-status.ts"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.10.0",
