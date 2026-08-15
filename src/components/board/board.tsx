@@ -253,8 +253,15 @@ export function Board({
      * Until now they described a drag to a screen-reader user who had no way to
      * begin one.
      *
-     * Known limit: this traverses *sortable items*. A column with no cards is a
-     * droppable with nothing to step onto, so it stays mouse-only.
+     * Empty columns are reachable, which is worth stating because the obvious
+     * assumption is that they are not. `sortableKeyboardCoordinates` walks
+     * `droppableContainers.getEnabled()` — every registered droppable, not the
+     * sortable items — and each column registers one on its list element. So
+     * the keyboard path covers the same targets the pointer does, including a
+     * column holding nothing and a collapsed column's strip.
+     *
+     * Confirmed in a browser, then confirmed against the implementation, in
+     * that order: the first note here claimed the opposite from reasoning alone.
      */
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );

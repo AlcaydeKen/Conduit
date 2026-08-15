@@ -482,7 +482,10 @@ card to their own board without minting an API key.
       offer people who already held cards, which is exactly nobody on a new workspace.
 - [x] Search as a fourth filter dimension, client-side over the loaded payload.
 - [x] `KeyboardSensor`, so the drag announcements written in Phase 3 reach someone who can
-      act on them.
+      act on them. Empty columns *are* reachable, contrary to the note first written here:
+      `sortableKeyboardCoordinates` walks every registered droppable rather than the sortable
+      items, and each column registers one. Browser first, then the implementation — the
+      original claim came from reasoning alone and was wrong.
 - [x] Per-card history in the drawer, via `?card=` on the activity route.
 - [x] Collapsible columns, and the column grid became a flex row so collapsing reclaims width.
 - [x] `restrictToWindowEdges` and a drop animation that stops the overlay flickering.
