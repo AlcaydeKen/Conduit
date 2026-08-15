@@ -181,7 +181,7 @@
 - [x] Enforce Tenant Rule 2: Fail closed with `404 Not Found` (never 403) on cross-tenant requests.
 - [x] Implement activity logging for machine and human actions.
 - [x] **Verification:** Run cross-tenant checks (byte-identical 404 on invalid vs unauthorized ids).
-  - `pnpm verify:tenant` — 51 checks over HTTP. Stands up a second workspace with its own key,
+  - `pnpm verify:tenant` — 58 checks over HTTP. Stands up a second workspace with its own key,
     then reaches for the first workspace's rows with it: every route 404s, every body is
     byte-identical to a genuinely missing id, and nothing is written. Also covers the
     revoked key, the unknown key, the service key, the `?workspace=` and body-`workspace_id`
@@ -276,9 +276,17 @@
   - Nothing is written on removal. `revoked` stays false and membership is the source of
     truth, so restoring a membership restores the keys — verified. A key that was
     deliberately revoked stays revoked, because that is a separate column.
-  - `created_by IS NULL` is the explicit carve-out: keys minted outside the UI by whoever
-    has database access — the n8n claim key, verification fixtures — have no person behind
-    them to offboard. Anyone able to insert such a row already has more than the key grants.
+  - **A missing creator is a dead key, not a system key.** The first cut carved out
+    `created_by IS NULL` as "nobody to offboard". That inverted the model, because
+    `created_by` is `ON DELETE SET NULL`: removing someone's *membership* killed their keys,
+    while deleting their *account* nulled the column and so preserved them — scrubbing the
+    provenance in the same motion. The more drastic administrative act produced the weaker
+    outcome. Requiring a live creator makes that FK behaviour fail closed, and both removals
+    now end the key. `verify:tenant` asserts the account-deletion path explicitly by nulling
+    `created_by` directly.
+  - Consequence: every workspace key needs a creator who is a current member, including ones
+    minted by hand in SQL. Service keys are unaffected — no workspace, and they authenticate
+    through `resolveClaimKey`.
   - Cost: one `EXISTS` on a primary-key index per machine request, folded into the existing
     statement rather than added as a second round trip.
 - `activity` is write-only. Nothing reads it, so the audit trail cannot yet contradict

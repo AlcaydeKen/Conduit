@@ -100,19 +100,23 @@ export async function resolveSessionActor(): Promise<Actor | null> {
  * application code path firing would simply not run. Making authentication
  * itself ask the question is the only version that cannot be skipped.
  *
- * `created_by IS NULL` is the deliberate exception — a key minted outside the
- * UI by whoever has database access, like the n8n claim key or a verification
- * fixture. There is no person behind it to offboard, so there is no membership
- * to lose. Anyone able to insert such a row already has more than the key gives
- * them.
+ * A missing creator is not a licence, it is a dead key. `created_by` is
+ * `ON DELETE SET NULL`, so deleting a person's `users` row nulls it — and an
+ * earlier version of this treated null as "a workspace-owned key with nobody to
+ * offboard", which inverted the whole model: removing someone's membership
+ * killed their keys, while deleting their account entirely *preserved* them and
+ * scrubbed the provenance at the same time. The more drastic administrative act
+ * produced the weaker outcome.
+ *
+ * Requiring a live creator makes that FK behaviour fail closed instead: both
+ * removals end the key, and the harder one cannot end up gentler. Service keys
+ * are unaffected — they carry no workspace and authenticate through
+ * `resolveClaimKey`, which is a different question entirely.
  */
-const CREATOR_STILL_A_MEMBER = sql`(
-  ${apiKeys.createdBy} IS NULL
-  OR EXISTS (
-    SELECT 1 FROM workspace_members wm
-    WHERE wm.workspace_id = ${apiKeys.workspaceId}
-      AND wm.user_id = ${apiKeys.createdBy}
-  )
+const CREATOR_STILL_A_MEMBER = sql`EXISTS (
+  SELECT 1 FROM workspace_members wm
+  WHERE wm.workspace_id = ${apiKeys.workspaceId}
+    AND wm.user_id = ${apiKeys.createdBy}
 )`;
 
 async function resolveKeyActor(bearer: string): Promise<Actor | null> {

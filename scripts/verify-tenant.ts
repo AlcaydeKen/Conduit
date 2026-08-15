@@ -123,11 +123,26 @@ async function main() {
       })
       .returning({ id: cards.id });
 
+    // Tenant B needs a member of its own: a key only authenticates while its
+    // creator is one, and the signed-in user must stay a stranger to B for the
+    // cross-tenant checks below to mean anything.
+    const [tenantBUser] = await db
+      .insert(users)
+      .values({
+        email: `tenant-verify-b@example.invalid`,
+        name: `${MARKER} tenant B member`,
+      })
+      .returning({ id: users.id });
+    await db
+      .insert(workspaceMembers)
+      .values({ workspaceId: workspaceB.id, userId: tenantBUser.id });
+
     const generatedB = generateApiKey();
     await db.insert(apiKeys).values({
       workspaceId: workspaceB.id,
       label: `${MARKER} key B`,
       keyHash: generatedB.hash,
+      createdBy: tenantBUser.id,
       scopes: ["board:read", "board:write"],
     });
 
@@ -136,6 +151,7 @@ async function main() {
       workspaceId: tenantA.id,
       label: `${MARKER} key A`,
       keyHash: generatedA.hash,
+      createdBy: user.id,
       scopes: ["board:read", "board:write"],
     });
     keyA = generatedA.plaintext;
@@ -156,6 +172,7 @@ async function main() {
         workspaceId: tenantA.id,
         label: `${MARKER} revoked key`,
         keyHash: generatedRevoked.hash,
+        createdBy: user.id,
         revoked: true,
         scopes: ["board:read", "board:write"],
       })
@@ -393,6 +410,7 @@ async function main() {
       workspaceId: fixture.workspaceId,
       label: `${MARKER} read only`,
       keyHash: readOnly.hash,
+      createdBy: tenantBUser.id,
       scopes: ["board:read"],
     });
     const bearerReadOnly = asKey(readOnly.plaintext);
@@ -445,6 +463,7 @@ async function main() {
       workspaceId: fixture.workspaceId,
       label: `${MARKER} scopeless`,
       keyHash: scopelessKey.hash,
+      createdBy: tenantBUser.id,
       scopes: [],
     });
     const noScopes = await asKey(scopelessKey.plaintext)("/api/v1/board");
@@ -463,13 +482,9 @@ async function main() {
       workspaceId: fixture.workspaceId,
       label: `${MARKER} delegated`,
       keyHash: delegated.hash,
-      createdBy: user.id,
+      createdBy: tenantBUser.id,
       scopes: ["board:read", "board:write"],
     });
-    await db
-      .insert(workspaceMembers)
-      .values({ workspaceId: fixture.workspaceId, userId: user.id })
-      .onConflictDoNothing();
 
     const whileMember = await asKey(delegated.plaintext)("/api/v1/board");
     check(
@@ -483,7 +498,7 @@ async function main() {
       .where(
         and(
           eq(workspaceMembers.workspaceId, fixture.workspaceId),
-          eq(workspaceMembers.userId, user.id),
+          eq(workspaceMembers.userId, tenantBUser.id),
         ),
       );
 
@@ -500,7 +515,7 @@ async function main() {
 
     await db
       .insert(workspaceMembers)
-      .values({ workspaceId: fixture.workspaceId, userId: user.id })
+      .values({ workspaceId: fixture.workspaceId, userId: tenantBUser.id })
       .onConflictDoNothing();
     const afterRestore = await asKey(delegated.plaintext)("/api/v1/board");
     check(
@@ -530,21 +545,24 @@ async function main() {
     });
     const ownerlessResponse = await asKey(ownerless.plaintext)("/api/v1/board");
     check(
-      "a key with no creator is unaffected by anyone's membership",
-      ownerlessResponse.status === 200,
+      "a key with no creator is refused, not treated as a system key",
+      ownerlessResponse.status === 401,
       ownerlessResponse.status,
     );
 
-    // Put tenant B back to having no human members — later checks depend on the
-    // signed-in user being a stranger to it.
+    // The inversion this replaced: `created_by` is ON DELETE SET NULL, so
+    // deleting the creator's account nulls it. That must not be gentler than
+    // merely removing their membership.
     await db
-      .delete(workspaceMembers)
-      .where(
-        and(
-          eq(workspaceMembers.workspaceId, fixture.workspaceId),
-          eq(workspaceMembers.userId, user.id),
-        ),
-      );
+      .update(apiKeys)
+      .set({ createdBy: null })
+      .where(eq(apiKeys.keyHash, delegated.hash));
+    const afterAccountDeletion = await asKey(delegated.plaintext)("/api/v1/board");
+    check(
+      "nulling created_by, as deleting the user would, also ends the key",
+      afterAccountDeletion.status === 401,
+      afterAccountDeletion.status,
+    );
 
     console.log("\n10. assignees cannot be borrowed from another tenant");
     const foreignAssignee = await bearerB(`/api/v1/cards`, {
@@ -611,6 +629,10 @@ async function main() {
       await db.delete(workspaceMembers).where(inArray(workspaceMembers.workspaceId, ids));
       await db.delete(workspaces).where(inArray(workspaces.id, ids));
     }
+
+    await db
+      .delete(users)
+      .where(eq(users.email, "tenant-verify-b@example.invalid"));
 
     // The service key and tenant A's throwaway keys have no workspace to cascade
     // from, so they are removed by label.

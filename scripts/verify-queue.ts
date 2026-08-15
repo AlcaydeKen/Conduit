@@ -12,7 +12,7 @@
 import { and, asc, eq, inArray, like } from "drizzle-orm";
 
 import { db } from "@/db";
-import { aiJobs, apiKeys, cards, workspaces } from "@/db/schema";
+import { aiJobs, apiKeys, cards, workspaceMembers, workspaces } from "@/db/schema";
 import { signJobToken } from "@/lib/api/job-token";
 import { generateApiKey } from "@/lib/api/keys";
 
@@ -56,6 +56,13 @@ async function main() {
     .orderBy(asc(cards.id))
     .limit(1);
 
+  const [member] = await db
+    .select({ id: workspaceMembers.userId })
+    .from(workspaceMembers)
+    .where(eq(workspaceMembers.workspaceId, workspace.id))
+    .limit(1);
+  if (!member) throw new Error("workspace has no members — sign in once first");
+
   const service = generateApiKey();
   const scoped = generateApiKey();
 
@@ -70,6 +77,7 @@ async function main() {
       {
         workspaceId: workspace.id,
         label: `${MARKER} scoped`,
+        createdBy: member.id,
         keyHash: scoped.hash,
         scopes: ["board:read", "board:write"],
       },

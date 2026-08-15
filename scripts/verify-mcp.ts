@@ -16,7 +16,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { asc, eq, inArray } from "drizzle-orm";
 
 import { db } from "@/db";
-import { apiKeys, cards, comments, workspaces } from "@/db/schema";
+import { apiKeys, cards, comments, workspaceMembers, workspaces } from "@/db/schema";
 import { generateApiKey } from "@/lib/api/keys";
 
 const BASE_URL = process.env.VERIFY_BASE_URL ?? "http://localhost:3000";
@@ -77,10 +77,20 @@ async function main() {
     .limit(1);
   if (!workspace) throw new Error("no workspace — run pnpm db:seed");
 
+  // A key must be minted by a live member: authentication requires it, so a
+  // creator-less fixture would be refused exactly as a departed person's key is.
+  const [member] = await db
+    .select({ id: workspaceMembers.userId })
+    .from(workspaceMembers)
+    .where(eq(workspaceMembers.workspaceId, workspace.id))
+    .limit(1);
+  if (!member) throw new Error("workspace has no members — sign in once first");
+
   const generated = generateApiKey();
   await db.insert(apiKeys).values({
     workspaceId: workspace.id,
     label: LABEL,
+    createdBy: member.id,
     keyHash: generated.hash,
     scopes: ["board:read", "board:write"],
   });
