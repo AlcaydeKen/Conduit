@@ -135,6 +135,11 @@ inside. Two runners sharing one key is what that floor exists to catch.
 
 ## Verifying without n8n
 
+`pnpm queue:status` prints the server's own view — whether the claim key
+authenticated (`last_used_at` only moves on a successful authenticate, so it is
+evidence a green n8n execution is not) and what each recent job is doing. That
+is the first thing to run when the canvas and reality disagree.
+
 `pnpm verify:queue` drives all of the above over HTTP — exactly-once handoff,
 the poll floor, token forgery, expiry, replay, and the sweeper — using a
 throwaway service key it cleans up afterwards. Run that before blaming the
