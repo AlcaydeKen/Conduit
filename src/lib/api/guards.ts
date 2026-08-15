@@ -10,7 +10,7 @@ import {
   workspaces,
 } from "@/db/schema";
 import { hashApiKey, readBearer } from "@/lib/api/keys";
-import { insufficientScope } from "@/lib/api/response";
+import { insufficientScope, unauthorized } from "@/lib/api/response";
 import { SCOPES, hasScope, type Scope } from "@/lib/api/scopes";
 
 export type Actor =
@@ -41,10 +41,35 @@ export type Actor =
  * exemption is something a route has to opt into, not something every route has
  * to remember to exclude.
  */
-export async function resolveActor(request: Request): Promise<Actor | null> {
+export type ActorResult =
+  | { ok: true; actor: Actor }
+  | { ok: false; response: Response };
+
+/**
+ * `scope` is a required argument for the same reason `request` is: a route that
+ * forgets it must fail to compile, not silently grant.
+ *
+ * The earlier design exported a separate `requireScope` that each route had to
+ * remember to call. Omitting it was valid TypeScript and produced a working,
+ * unscoped endpoint — a read-only key could write, and nothing would say so.
+ * Folding the check into the only function that hands out an `Actor` means
+ * there is no way to obtain one without having stated what it is for.
+ */
+export async function resolveActor(
+  request: Request,
+  scope: Scope,
+): Promise<ActorResult> {
   const bearer = readBearer(request);
-  if (bearer) return resolveKeyActor(bearer);
-  return resolveSessionActor();
+  const actor = bearer ? await resolveKeyActor(bearer) : await resolveSessionActor();
+
+  if (!actor) return { ok: false, response: unauthorized() };
+
+  // Before any row is loaded, so a refusal can never depend on what exists.
+  if (actor.kind === "key" && !hasScope(actor.scopes, scope)) {
+    return { ok: false, response: insufficientScope(scope) };
+  }
+
+  return { ok: true, actor };
 }
 
 /**
@@ -100,24 +125,6 @@ async function resolveKeyActor(bearer: string): Promise<Actor | null> {
     label: `key:${row.id}`,
     scopes: row.scopes,
   };
-}
-
-/**
- * Refuses an actor that lacks a scope, or null when it may proceed.
- *
- * A signed-in person is never scope-checked: their permissions come from
- * `workspace_members`, and a scope is a property of a *key*. Handing users an
- * implicit scope set would mean two authorisation systems disagreeing about the
- * same person.
- *
- * Call this before loading anything. A 403 that depends on whether a row exists
- * would leak the row's existence, which is precisely what the 404 rule spends
- * its effort hiding.
- */
-export function requireScope(actor: Actor, scope: Scope): Response | null {
-  if (actor.kind === "user") return null;
-  if (hasScope(actor.scopes, scope)) return null;
-  return insufficientScope(scope);
 }
 
 export type ClaimKey = { keyId: number; label: string };

@@ -8,11 +8,10 @@ import { logActivity } from "@/lib/api/activity";
 import {
   loadSprintForActor,
   parseIntParam,
-  requireScope,
   resolveActor,
 } from "@/lib/api/guards";
 import { SCOPES } from "@/lib/api/scopes";
-import { badRequest, notFound, ok, unauthorized } from "@/lib/api/response";
+import { badRequest, notFound, ok } from "@/lib/api/response";
 import { readOrder, type OrderScope } from "@/lib/ordering";
 
 const completeSchema = z.object({
@@ -26,11 +25,9 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
-  const actor = await resolveActor(request);
-  if (!actor) return unauthorized();
-
-  const denied = requireScope(actor, SCOPES.BOARD_WRITE);
-  if (denied) return denied;
+  const auth = await resolveActor(request, SCOPES.BOARD_WRITE);
+  if (!auth.ok) return auth.response;
+  const actor = auth.actor;
 
   const { id } = await context.params;
   const sprintId = parseIntParam(id);

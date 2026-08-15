@@ -5,12 +5,11 @@ import { db } from "@/db";
 import { sprints } from "@/db/schema";
 import {
   parseIntParam,
-  requireScope,
   resolveActor,
   resolveWorkspace,
 } from "@/lib/api/guards";
 import { SCOPES } from "@/lib/api/scopes";
-import { badRequest, conflict, notFound, ok, unauthorized } from "@/lib/api/response";
+import { badRequest, conflict, notFound, ok } from "@/lib/api/response";
 import { listSprints } from "@/lib/board-queries";
 
 const createSchema = z.object({
@@ -24,11 +23,9 @@ const createSchema = z.object({
 });
 
 export async function GET(request: Request) {
-  const actor = await resolveActor(request);
-  if (!actor) return unauthorized();
-
-  const denied = requireScope(actor, SCOPES.BOARD_READ);
-  if (denied) return denied;
+  const auth = await resolveActor(request, SCOPES.BOARD_READ);
+  if (!auth.ok) return auth.response;
+  const actor = auth.actor;
 
   const url = new URL(request.url);
   const workspace = await resolveWorkspace(
@@ -51,11 +48,9 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const actor = await resolveActor(request);
-  if (!actor) return unauthorized();
-
-  const denied = requireScope(actor, SCOPES.BOARD_WRITE);
-  if (denied) return denied;
+  const auth = await resolveActor(request, SCOPES.BOARD_WRITE);
+  if (!auth.ok) return auth.response;
+  const actor = auth.actor;
 
   const parsed = createSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return badRequest("invalid_body", parsed.error.issues);

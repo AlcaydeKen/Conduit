@@ -1,17 +1,14 @@
 import {
   listWorkspaces,
-  requireScope,
   resolveActor,
 } from "@/lib/api/guards";
 import { SCOPES } from "@/lib/api/scopes";
-import { ok, unauthorized } from "@/lib/api/response";
+import { ok } from "@/lib/api/response";
 
 export async function GET(request: Request) {
-  const actor = await resolveActor(request);
-  if (!actor) return unauthorized();
-
-  const denied = requireScope(actor, SCOPES.BOARD_READ);
-  if (denied) return denied;
+  const auth = await resolveActor(request, SCOPES.BOARD_READ);
+  if (!auth.ok) return auth.response;
+  const actor = auth.actor;
 
   const workspaces = await listWorkspaces(actor);
   return ok({ workspaces });

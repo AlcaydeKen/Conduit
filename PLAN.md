@@ -244,8 +244,13 @@
   id already needs.
 
 - `api_keys.scopes` is enforced. `board:read`, `board:write` (which implies read), and
-  `ai:claim`, checked by `requireScope` in `src/lib/api/guards.ts` and applied to all
-  eleven routes. Settings can mint a read-only key, because a scope nobody can choose is
+  `ai:claim`. The scope is a **required argument of `resolveActor`**, which returns
+  `{ok: true, actor}` or `{ok: false, response}` — so a route cannot obtain an `Actor`
+  without having said what it is for. The first version exported a separate `requireScope`
+  that each route called, which was the wrong shape for the same reason an optional
+  `request` would have been: omitting it was valid TypeScript and produced a working,
+  silently unscoped endpoint. Omitting the scope is now `TS2554`, verified by compiling a
+  throwaway route that leaves it out. Settings can mint a read-only key, because a scope nobody can choose is
   the same dead surface under a new name.
   - **Scope failures are 403, and that does not contradict the 404 rule.** Tenancy answers
     "does this row exist for you" and must be 404, because separating "absent" from

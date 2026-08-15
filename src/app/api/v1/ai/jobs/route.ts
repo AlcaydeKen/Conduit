@@ -7,7 +7,6 @@ import { logActivity } from "@/lib/api/activity";
 import {
   loadCardForActor,
   parseIntParam,
-  requireScope,
   resolveActor,
 } from "@/lib/api/guards";
 import { SCOPES } from "@/lib/api/scopes";
@@ -16,7 +15,6 @@ import {
   conflict,
   notFound,
   ok,
-  unauthorized,
 } from "@/lib/api/response";
 
 /** The kinds a card-scoped job may be queued as. */
@@ -71,11 +69,9 @@ const jobProjection = {
 
 /** The newest job for one card, which is what the drawer polls. */
 export async function GET(request: Request) {
-  const actor = await resolveActor(request);
-  if (!actor) return unauthorized();
-
-  const denied = requireScope(actor, SCOPES.BOARD_READ);
-  if (denied) return denied;
+  const auth = await resolveActor(request, SCOPES.BOARD_READ);
+  if (!auth.ok) return auth.response;
+  const actor = auth.actor;
 
   const url = new URL(request.url);
   const cardId = parseIntParam(url.searchParams.get("card"));
@@ -99,11 +95,9 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const actor = await resolveActor(request);
-  if (!actor) return unauthorized();
-
-  const denied = requireScope(actor, SCOPES.BOARD_WRITE);
-  if (denied) return denied;
+  const auth = await resolveActor(request, SCOPES.BOARD_WRITE);
+  if (!auth.ok) return auth.response;
+  const actor = auth.actor;
 
   const parsed = enqueueSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return badRequest("invalid_body", parsed.error.issues);

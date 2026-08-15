@@ -8,11 +8,10 @@ import {
   authorIdOf,
   loadCardForActor,
   parseIntParam,
-  requireScope,
   resolveActor,
 } from "@/lib/api/guards";
 import { SCOPES } from "@/lib/api/scopes";
-import { badRequest, notFound, ok, unauthorized } from "@/lib/api/response";
+import { badRequest, notFound, ok } from "@/lib/api/response";
 
 const bodySchema = z.object({
   body: z.string().trim().min(1).max(10_000),
@@ -28,11 +27,9 @@ export async function GET(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
-  const actor = await resolveActor(request);
-  if (!actor) return unauthorized();
-
-  const denied = requireScope(actor, SCOPES.BOARD_READ);
-  if (denied) return denied;
+  const auth = await resolveActor(request, SCOPES.BOARD_READ);
+  if (!auth.ok) return auth.response;
+  const actor = auth.actor;
 
   const { id } = await context.params;
   const cardId = parseIntParam(id);
@@ -71,11 +68,9 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
-  const actor = await resolveActor(request);
-  if (!actor) return unauthorized();
-
-  const denied = requireScope(actor, SCOPES.BOARD_WRITE);
-  if (denied) return denied;
+  const auth = await resolveActor(request, SCOPES.BOARD_WRITE);
+  if (!auth.ok) return auth.response;
+  const actor = auth.actor;
 
   const { id } = await context.params;
   const cardId = parseIntParam(id);

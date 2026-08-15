@@ -5,11 +5,10 @@ import { cards, columns } from "@/db/schema";
 import {
   loadSprintForActor,
   parseIntParam,
-  requireScope,
   resolveActor,
 } from "@/lib/api/guards";
 import { SCOPES } from "@/lib/api/scopes";
-import { notFound, ok, unauthorized } from "@/lib/api/response";
+import { notFound, ok } from "@/lib/api/response";
 
 /** A card untouched for this long is worth surfacing in a standup. */
 const STALE_AFTER_DAYS = 7;
@@ -19,11 +18,9 @@ export async function GET(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
-  const actor = await resolveActor(request);
-  if (!actor) return unauthorized();
-
-  const denied = requireScope(actor, SCOPES.BOARD_READ);
-  if (denied) return denied;
+  const auth = await resolveActor(request, SCOPES.BOARD_READ);
+  if (!auth.ok) return auth.response;
+  const actor = auth.actor;
 
   const { id } = await context.params;
   const sprintId = parseIntParam(id);
