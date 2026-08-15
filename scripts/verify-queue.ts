@@ -50,7 +50,7 @@ async function main() {
   if (!workspace) throw new Error("no workspace — run pnpm db:seed");
 
   const [card] = await db
-    .select({ id: cards.id })
+    .select({ id: cards.id, title: cards.title })
     .from(cards)
     .where(eq(cards.workspaceId, workspace.id))
     .orderBy(asc(cards.id))
@@ -106,14 +106,51 @@ async function main() {
 
     console.log("0. enqueueing from the app side");
     if (card) {
+      // The caller sends a card title that is not this card's, which is the
+      // whole point: the runner prompts a model with whatever is in `input`, so
+      // a caller who can choose it can write the prompt. The server's copy has
+      // to win, and the caller's other keys have to survive.
       const enqueue = await post("/api/v1/ai/jobs", scoped.plaintext, {
         card_id: card.id,
         kind: "draft_card",
-        input: { marker: MARKER },
+        input: {
+          marker: MARKER,
+          card: { id: -1, title: "spoofed by the caller", description: "x" },
+        },
       });
       check("POST /ai/jobs is 200", enqueue.status === 200, enqueue.status);
       const enqueued = (await enqueue.json()).job;
       check("it comes back pending", enqueued?.status === "pending", enqueued);
+
+      const [storedJob] = await db
+        .select({ input: aiJobs.input })
+        .from(aiJobs)
+        .where(eq(aiJobs.id, enqueued.id as number));
+      const storedInput = storedJob?.input as {
+        marker?: string;
+        card?: { id?: number; title?: string };
+      };
+
+      check(
+        "the job carries the card's real title, not the caller's",
+        storedInput?.card?.title === card.title,
+        storedInput?.card,
+      );
+      check(
+        "and the card id the server proved, not the one sent",
+        storedInput?.card?.id === card.id,
+        storedInput?.card?.id,
+      );
+      check(
+        "caller-supplied keys outside `card` are kept",
+        storedInput?.marker === MARKER,
+        storedInput?.marker,
+      );
+      check(
+        "the drawer is told which title the draft came from",
+        enqueued?.source_title === card.title,
+        enqueued?.source_title,
+      );
 
       const duplicate = await post("/api/v1/ai/jobs", scoped.plaintext, {
         card_id: card.id,

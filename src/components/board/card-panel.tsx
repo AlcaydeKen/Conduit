@@ -33,6 +33,8 @@ type AiJob = {
   result: unknown;
   error: string | null;
   attempts: number;
+  /** The card title the job was generated from. Null on jobs queued before this existed. */
+  source_title: string | null;
 };
 
 const jobFetcher = async (url: string) => {
@@ -117,6 +119,24 @@ export function CardPanel({
   const job = jobData?.job ?? null;
   const jobRunning = job !== null && IN_FLIGHT.has(job.status);
   const draftText = job?.status === "done" ? draftTextOf(job.result) : null;
+
+  /*
+   * The draft was written from the card as it stood at enqueue, and a job can
+   * outlive that — pending, then 2+ minutes generating, then up to three sweeps
+   * and retries. Nothing stops a teammate renaming the card in that window.
+   *
+   * Comparing titles rather than re-running or discarding the draft: the
+   * snapshot is doing what it is for, and the older draft is often still worth
+   * reading. What was missing was any way to tell that from the drawer, where a
+   * confident paragraph about the wrong subject reads as a broken model.
+   *
+   * Null `source_title` means a job queued before the field existed, which is
+   * absence of evidence rather than evidence of a match — so it says nothing.
+   */
+  const staleTitle =
+    draftText && job?.source_title && card && job.source_title !== card.title
+      ? job.source_title
+      : null;
 
   async function queueDraft() {
     if (!cardId) return;
@@ -250,6 +270,11 @@ export function CardPanel({
                 <p className="text-muted-foreground text-xs font-medium">
                   AI draft — not applied to the card
                 </p>
+                {staleTitle ? (
+                  <p className="text-muted-foreground text-xs italic">
+                    Written from an earlier title: “{staleTitle}”
+                  </p>
+                ) : null}
                 <Prose>{draftText}</Prose>
               </div>
             ) : null}

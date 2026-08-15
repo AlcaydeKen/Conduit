@@ -31,11 +31,27 @@ const enqueueSchema = z.object({
   input: z.record(z.string(), z.unknown()).optional(),
 });
 
+/**
+ * The title the job was generated from, if the input recorded one.
+ *
+ * Only the title, rather than `input` whole. `input` also carries whatever keys
+ * the caller passed at enqueue, and there is no reason to hand those back on
+ * every drawer poll to render one line of provenance.
+ */
+function sourceTitleOf(input: unknown): string | null {
+  if (!input || typeof input !== "object") return null;
+  const card = (input as { card?: unknown }).card;
+  if (!card || typeof card !== "object") return null;
+  const title = (card as { title?: unknown }).title;
+  return typeof title === "string" ? title : null;
+}
+
 function toApiJob(row: {
   id: number;
   cardId: number | null;
   kind: string;
   status: string;
+  input: unknown;
   result: unknown;
   error: string | null;
   attempts: number;
@@ -50,6 +66,18 @@ function toApiJob(row: {
     result: row.result,
     error: row.error,
     attempts: row.attempts,
+    /*
+     * `input` is a snapshot taken at enqueue and deliberately never refreshed —
+     * a retry half an hour later must run the same prompt as the first attempt,
+     * and the runner could not re-read the card even if it wanted to, holding a
+     * claim-only credential.
+     *
+     * The consequence lands here: the drawer renders the draft beside a card
+     * that may since have been renamed, and without this field it has nothing
+     * to say why the two disagree. A confident paragraph about the wrong
+     * subject reads as a broken model rather than a stale snapshot.
+     */
+    source_title: sourceTitleOf(row.input),
     created_at: row.createdAt.toISOString(),
     updated_at: row.updatedAt.toISOString(),
   };
@@ -60,6 +88,7 @@ const jobProjection = {
   cardId: aiJobs.cardId,
   kind: aiJobs.kind,
   status: aiJobs.status,
+  input: aiJobs.input,
   result: aiJobs.result,
   error: aiJobs.error,
   attempts: aiJobs.attempts,
