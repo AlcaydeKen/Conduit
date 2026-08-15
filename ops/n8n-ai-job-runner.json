@@ -55,10 +55,10 @@
           },
           "conditions": [
             {
-              "leftValue": "={{ $json.body.job }}",
+              "leftValue": "={{ $json.body.job?.id }}",
               "rightValue": "",
               "operator": {
-                "type": "object",
+                "type": "number",
                 "operation": "exists",
                 "singleValue": true
               }
@@ -90,7 +90,7 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ model: 'qwen3:4b', stream: false, prompt: `You are helping run a kanban board. Job kind: ${$json.body.job.kind}.\\n\\nInput:\\n${JSON.stringify($json.body.job.input, null, 2)}\\n\\nRespond with the requested content only.` }) }}",
         "options": {
-          "timeout": 600000,
+          "timeout": 480000,
           "response": {
             "response": {
               "neverError": true,
