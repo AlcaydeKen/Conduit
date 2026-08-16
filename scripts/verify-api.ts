@@ -11,7 +11,7 @@ import { encode } from "@auth/core/jwt";
 import { and, asc, eq } from "drizzle-orm";
 
 import { db } from "@/db";
-import { cards, columns, sprints, users, workspaces } from "@/db/schema";
+import { cards, columns, labels, sprints, users, workspaces } from "@/db/schema";
 import { readOrder, type OrderScope } from "@/lib/ordering";
 
 const BASE_URL = process.env.VERIFY_BASE_URL ?? "http://localhost:3000";
@@ -328,7 +328,144 @@ async function main() {
       ((await unknownCardHistory.json()).entries as unknown[]).length === 0,
   );
 
+  console.log("\n6. labels and archiving");
+
+  const labelList = await authed(`/api/v1/labels?workspace=${workspace.id}`);
+  check("GET /labels is 200", labelList.status === 200, labelList.status);
+  const workspaceLabels = (await labelList.json()).labels as {
+    id: number;
+    name: string;
+    color: string;
+  }[];
+
+  const labelName = `[verify-api] label ${newCard.id}`;
+  const madeLabel = await authed("/api/v1/labels", {
+    method: "POST",
+    body: JSON.stringify({ workspace_id: workspace.id, name: labelName }),
+  });
+  check("POST /labels is 200", madeLabel.status === 200, madeLabel.status);
+  const label = (await madeLabel.json()).label as { id: number; color: string };
+  check("it defaults to a colour", /^#[0-9a-f]{6}$/i.test(label.color), label.color);
+
+  // Unique on (workspace_id, name), enforced by the index rather than a SELECT,
+  // so two people racing the same name cannot both win.
+  const dupe = await authed("/api/v1/labels", {
+    method: "POST",
+    body: JSON.stringify({ workspace_id: workspace.id, name: labelName }),
+  });
+  check("the same name twice is 409", dupe.status === 409, dupe.status);
+
+  const attached = await authed(`/api/v1/cards/${newCard.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ label_ids: [label.id] }),
+  });
+  const attachedCard = (await attached.json()).card as {
+    labels: { id: number }[];
+  };
+  check(
+    "PATCH label_ids attaches, and the card reports it",
+    attached.status === 200 &&
+      attachedCard.labels.map((item) => item.id).join(",") === String(label.id),
+    attachedCard.labels,
+  );
+
+  // Replace-set, not a delta: an empty array is how a card is cleared.
+  const cleared = await authed(`/api/v1/cards/${newCard.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ label_ids: [] }),
+  });
+  check(
+    "an empty label_ids clears them",
+    cleared.status === 200 &&
+      ((await cleared.json()).card.labels as unknown[]).length === 0,
+  );
+
+  const unknownLabel = await authed(`/api/v1/cards/${newCard.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ label_ids: [999999] }),
+  });
+  check(
+    "a label that does not exist is 404, not a partial attach",
+    unknownLabel.status === 404,
+    unknownLabel.status,
+  );
+
+  // Archive, then prove it leaves the board without leaving the database.
+  const archived = await authed(`/api/v1/cards/${newCard.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ archived: true }),
+  });
+  check("PATCH archived:true is 200", archived.status === 200, archived.status);
+  check(
+    "and the card reports itself archived",
+    (await archived.json()).card.archived === true,
+  );
+
+  const boardAfter = await authed(`/api/v1/board?workspace=${workspace.id}`);
+  const boardCards = (await boardAfter.json()) as {
+    cards: { id: number }[];
+    backlog: { id: number }[];
+    labels: unknown[];
+  };
+  check(
+    "an archived card is off the board",
+    ![...boardCards.cards, ...boardCards.backlog].some(
+      (item) => item.id === newCard.id,
+    ),
+  );
+  check(
+    "the board payload carries the workspace's labels",
+    Array.isArray(boardCards.labels) && boardCards.labels.length > 0,
+    boardCards.labels?.length,
+  );
+
+  const liveList = await authed(`/api/v1/cards?workspace=${workspace.id}`);
+  check(
+    "and out of the default card list",
+    !((await liveList.json()).cards as { id: number }[]).some(
+      (item) => item.id === newCard.id,
+    ),
+  );
+
+  const archivedList = await authed(
+    `/api/v1/cards?workspace=${workspace.id}&archived=true`,
+  );
+  check(
+    "but findable with ?archived=true — otherwise this is deletion",
+    ((await archivedList.json()).cards as { id: number }[]).some(
+      (item) => item.id === newCard.id,
+    ),
+  );
+
+  const restored = await authed(`/api/v1/cards/${newCard.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ archived: false }),
+  });
+  check(
+    "restoring puts it back",
+    restored.status === 200 &&
+      (await restored.json()).card.archived === false,
+  );
+
+  const cardHistoryAfter = await authed(
+    `/api/v1/activity?workspace=${workspace.id}&card=${newCard.id}&limit=25`,
+  );
+  const historyActions = (
+    (await cardHistoryAfter.json()).entries as { action: string }[]
+  ).map((entry) => entry.action);
+  check(
+    "archive and restore are their own actions in the log",
+    historyActions.includes("card.archive") &&
+      historyActions.includes("card.restore"),
+    historyActions,
+  );
+
   // Put everything back so repeat runs start from the same place.
+  await db.delete(labels).where(eq(labels.id, label.id));
+  check(
+    "the pre-existing labels were left alone",
+    workspaceLabels.every((item) => item.id !== label.id),
+  );
   await db.delete(cards).where(eq(cards.id, newCard.id));
   await db
     .update(cards)

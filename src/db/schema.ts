@@ -213,6 +213,14 @@ export const cards = pgTable(
     points: integer("points"),
     /** fractional index, always computed server-side */
     position: text("position").notNull(),
+    /**
+     * Set = archived, hidden from every board read. Null = live.
+     *
+     * Archived rather than deleted because `comments`, `activity` and `ai_jobs`
+     * all reference cards and `activity` cascades — a hard delete would erase
+     * the audit trail this system is built around, in order to tidy a board.
+     */
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -228,6 +236,11 @@ export const cards = pgTable(
       table.position,
       table.id,
     ),
+    // Every board read now carries `archived_at IS NULL`, and on a board where
+    // most cards are eventually archived that predicate is the selective one.
+    index("cards_live_idx")
+      .on(table.workspaceId, table.columnId, table.position, table.id)
+      .where(sql`archived_at is null`),
     index("cards_sprint_idx").on(table.workspaceId, table.sprintId),
     index("cards_assignee_idx").on(table.workspaceId, table.assigneeId),
   ],

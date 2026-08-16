@@ -17,7 +17,12 @@ import {
   type CardFilters,
 } from "@/lib/board-filters";
 import { cn } from "@/lib/utils";
-import type { BoardCard, BoardColumn } from "@/types/board";
+import type {
+  BoardCard,
+  BoardColumn,
+  BoardLabel,
+  Person,
+} from "@/types/board";
 
 /**
  * Chips rather than dropdowns. Nothing here opens a portal, so none of it can
@@ -28,17 +33,20 @@ function Chip({
   selected,
   onClick,
   className,
+  style,
   children,
 }: {
   selected: boolean;
   onClick: () => void;
   className?: string;
+  style?: React.CSSProperties;
   children: React.ReactNode;
 }) {
   return (
     <button type="button" onClick={onClick} aria-pressed={selected}>
       <Badge
         variant={selected ? "secondary" : "outline"}
+        style={style}
         className={cn(
           "cursor-pointer gap-1 px-2 py-0.5 text-xs font-normal transition-colors",
           !selected && "text-muted-foreground hover:text-foreground",
@@ -71,20 +79,34 @@ function Group({
 export function FilterBar({
   columns,
   cards,
+  labels,
+  members,
   filters,
   onChange,
   visibleCount,
   totalCount,
 }: {
   columns: BoardColumn[];
-  /** Every card in view, board and backlog, unfiltered — this is the roster. */
+  /** Every card in view, board and backlog, unfiltered. */
   cards: BoardCard[];
+  /** Every label in the workspace, from the board payload. */
+  labels: BoardLabel[];
+  /**
+   * The workspace roster. Null while it loads — the chips fall back to the
+   * people holding cards rather than flashing an empty Assignee group, since a
+   * row that appears a moment later is worse than one that starts small.
+   */
+  members: Person[] | null;
   filters: CardFilters;
   onChange: (filters: CardFilters) => void;
   visibleCount: number;
   totalCount: number;
 }) {
-  const assignees = collectAssignees(cards);
+  // The whole roster, not just people with cards: filtering to a colleague and
+  // seeing nothing is how you find out they have nothing assigned.
+  const assignees = members ?? collectAssignees(cards);
+  // "Unassigned" is offered whenever there is a card without an owner. It is a
+  // property of the board, not of the roster, so it does not come from members.
   const showUnassigned = hasUnassigned(cards);
   const active = isFiltering(filters);
 
@@ -141,6 +163,35 @@ export function FilterBar({
           </Chip>
         ))}
       </Group>
+
+      {labels.length > 0 ? (
+        <Group label="Label">
+          {labels.map((label) => {
+            const selected = filters.labels.includes(label.id);
+            return (
+              <Chip
+                key={label.id}
+                selected={selected}
+                onClick={() =>
+                  onChange({
+                    ...filters,
+                    labels: toggleFilter(filters.labels, label.id),
+                  })
+                }
+                // The label's own colour when selected, so the chip and the
+                // card face agree about what was picked. Outline when not, or
+                // every label would read as active.
+                className={selected ? "border-transparent text-white" : undefined}
+                style={
+                  selected ? { backgroundColor: label.color } : undefined
+                }
+              >
+                {label.name}
+              </Chip>
+            );
+          })}
+        </Group>
+      ) : null}
 
       {assignees.length > 0 || showUnassigned ? (
         <Group label="Assignee">

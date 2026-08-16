@@ -46,11 +46,19 @@ export type BoardSprint = {
   ends_at: string | null;
 };
 
+export type BoardLabel = { id: number; name: string; color: string };
+
 export type BoardPayload = {
   workspace: { id: number; name: string; slug: string };
   sprints: BoardSprint[];
   selected_sprint: SprintFilter;
   columns: BoardColumn[];
+  /**
+   * Every label in the workspace, not only the ones currently on a card. The
+   * filter bar and the drawer's selector both need the full roster, and a label
+   * nobody has used yet is exactly the one you are about to apply.
+   */
+  labels: BoardLabel[];
   cards: BoardCard[];
   /**
    * Always present so the backlog rail can render beside a sprint board and

@@ -1,11 +1,25 @@
-import { and, asc, eq, ilike, isNull, or, type SQL } from "drizzle-orm";
+import {
+  and,
+  asc,
+  eq,
+  ilike,
+  isNotNull,
+  isNull,
+  or,
+  type SQL,
+} from "drizzle-orm";
 import { generateKeyBetween } from "fractional-indexing";
 import { z } from "zod";
 
 import { db } from "@/db";
 import { cards, columns, sprints, users, workspaceMembers } from "@/db/schema";
 import { logActivity } from "@/lib/api/activity";
-import { assigneeJoin, cardProjection, toApiCard } from "@/lib/api/cards";
+import {
+  assigneeJoin,
+  cardProjection,
+  labelsByCard,
+  toApiCard,
+} from "@/lib/api/cards";
 import {
   parseIntParam,
   resolveActor,
@@ -45,6 +59,22 @@ export async function GET(request: Request) {
   // Every filter is another predicate on a query already constrained to one
   // workspace. None of them can widen the result set.
   const filters: SQL[] = [eq(cards.workspaceId, workspace.id)];
+
+  /*
+   * Archived cards are excluded unless asked for.
+   *
+   * `?archived=true` is the only way back: archiving with no way to list what
+   * was archived is deletion with extra steps, and the whole reason this is a
+   * timestamp rather than a DELETE is that the row has to remain recoverable.
+   */
+  const archivedParam = url.searchParams.get("archived");
+  if (archivedParam === "true") {
+    filters.push(isNotNull(cards.archivedAt));
+  } else if (archivedParam === "all") {
+    // no predicate
+  } else {
+    filters.push(isNull(cards.archivedAt));
+  }
 
   const sprintParam = url.searchParams.get("sprint");
   if (sprintParam === "backlog") {
@@ -95,8 +125,11 @@ export async function GET(request: Request) {
     .orderBy(asc(cards.position), asc(cards.id))
     .limit(limit + 1);
 
+  const page = rows.slice(0, limit);
+  const labelsFor = await labelsByCard(page.map((row) => row.id));
+
   return ok({
-    cards: rows.slice(0, limit).map(toApiCard),
+    cards: page.map((row) => toApiCard(row, labelsFor.get(row.id) ?? [])),
     truncated: rows.length > limit,
     limit,
   });
@@ -203,10 +236,7 @@ export async function POST(request: Request) {
   });
 
   return ok({
-    card: toApiCard({
-      ...created,
-      assigneeName: null,
-      assigneeImage: null,
-    }),
+    // A card created this way has no labels yet — attach them with PATCH.
+    card: toApiCard({ ...created, assigneeName: null, assigneeImage: null }, []),
   });
 }

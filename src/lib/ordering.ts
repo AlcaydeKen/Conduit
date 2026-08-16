@@ -25,15 +25,31 @@ export type OrderScope =
 
 export type OrderedCard = { id: number; position: string };
 
+/*
+ * Archived cards are outside every ordering scope.
+ *
+ * A scope is the key space for what is displayed together, and an archived card
+ * is displayed nowhere. Leaving them in would make `readOrder` return rows the
+ * client cannot see, so an append would land after an invisible card and a
+ * rebalance would spend keys on rows nobody is looking at.
+ *
+ * The cost is that restoring a card returns it with a key from the old
+ * numbering, which can now collide or sort oddly. That is bounded and visible —
+ * `id ASC` still gives every client the same order, and the next move through
+ * the scope rebalances it — whereas the alternative is a permanent tax on every
+ * live board for the sake of rows that have been put away.
+ */
 export function scopeWhere(scope: OrderScope): SQL {
   if (scope.kind === "backlog") {
     return and(
       eq(cards.workspaceId, scope.workspaceId),
+      isNull(cards.archivedAt),
       isNull(cards.sprintId),
     )!;
   }
   return and(
     eq(cards.workspaceId, scope.workspaceId),
+    isNull(cards.archivedAt),
     eq(cards.columnId, scope.columnId),
     eq(cards.sprintId, scope.sprintId),
   )!;
@@ -42,9 +58,9 @@ export function scopeWhere(scope: OrderScope): SQL {
 /** The same predicate as raw SQL, for the single-statement rebalance below. */
 function scopeSql(scope: OrderScope): SQL {
   if (scope.kind === "backlog") {
-    return sql`c.workspace_id = ${scope.workspaceId} AND c.sprint_id IS NULL`;
+    return sql`c.workspace_id = ${scope.workspaceId} AND c.archived_at IS NULL AND c.sprint_id IS NULL`;
   }
-  return sql`c.workspace_id = ${scope.workspaceId} AND c.column_id = ${scope.columnId} AND c.sprint_id = ${scope.sprintId}`;
+  return sql`c.workspace_id = ${scope.workspaceId} AND c.archived_at IS NULL AND c.column_id = ${scope.columnId} AND c.sprint_id = ${scope.sprintId}`;
 }
 
 /**

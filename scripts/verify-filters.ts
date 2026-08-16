@@ -175,6 +175,37 @@ function main() {
     filterCards(searchable, filters({ query: "reportPoints" })).length === 0,
   );
 
+  console.log("\n2c. labels");
+  const red = { id: 1, name: "bug", color: "#ef4444" };
+  const blue = { id: 2, name: "chore", color: "#3b82f6" };
+  const labelled = [
+    { ...card(20), labels: [red] },
+    { ...card(21), labels: [red, blue] },
+    { ...card(22), labels: [] },
+  ];
+  check(
+    "one label matches every card carrying it",
+    filterCards(labelled, filters({ labels: [red.id] }))
+      .map((item) => item.id)
+      .join(",") === "20,21",
+  );
+  check(
+    "two labels are OR, not AND",
+    filterCards(labelled, filters({ labels: [red.id, blue.id] }))
+      .map((item) => item.id)
+      .join(",") === "20,21",
+    "AND would return only #21",
+  );
+  check(
+    "a card with no labels matches no label filter",
+    !matchesCard(labelled[2], filters({ labels: [red.id] })),
+  );
+  check(
+    "labels AND with the other dimensions",
+    filterCards(labelled, filters({ labels: [blue.id], priorities: ["low"] }))
+      .length === 0,
+  );
+
   console.log("\n2b. a visible card cannot be dragged out of sight");
   // Worth stating as a check rather than a comment. It is the reason there is
   // no "your card is now hidden" notice: to be dragged at all a card must be
@@ -183,10 +214,12 @@ function main() {
   // dimension keys on something a move *can* change, this check fails and the
   // notice becomes necessary.
   const columnIds = [1, 2, 3, 4];
+  // Labels on some of them, so the label filter below actually leaves cards
+  // visible to move. A filter that hides everything proves nothing here.
   const population = [
-    card(50, { priority: "low", columnId: 1, assignee: ana }),
-    card(51, { priority: "urgent", columnId: 2, assignee: null }),
-    card(52, { priority: "high", columnId: 3, assignee: bo }),
+    { ...card(50, { priority: "low", columnId: 1, assignee: ana }), labels: [red] },
+    { ...card(51, { priority: "urgent", columnId: 2, assignee: null }), labels: [red, blue] },
+    { ...card(52, { priority: "high", columnId: 3, assignee: bo }), labels: [blue] },
     card(53, { priority: "medium", columnId: 4, assignee: ana }),
   ];
   const everyFilter = [
@@ -201,6 +234,11 @@ function main() {
     // so the invariant survives — but that has to be demonstrated, not assumed.
     filters({ query: "Card 5" }),
     filters({ query: "card 5", columns: [1, 2] }),
+    // Labels, for the same reason as search: a move changes column_id and
+    // sprint_id, and neither is a label — but the sweep is only as good as the
+    // set of dimensions in it.
+    filters({ labels: [red.id] }),
+    filters({ labels: [red.id, blue.id], columns: [1, 2, 3] }),
   ];
 
   let stayedVisible = true;

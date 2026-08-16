@@ -17,9 +17,11 @@ import { generateKeyBetween } from "fractional-indexing";
 import { db } from "@/db";
 import {
   apiKeys,
+  cardLabels,
   cards,
   columns,
   comments,
+  labels as labelsTable,
   sprints,
   users,
   workspaceMembers,
@@ -289,6 +291,7 @@ async function main() {
       // as everything else rather than a friendlier one.
       [`/api/v1/members?workspace=${tenantA.id}`, {}],
       [`/api/v1/activity?workspace=${tenantA.id}&card=${cardA.id}`, {}],
+      [`/api/v1/labels?workspace=${tenantA.id}`, {}],
       [`/api/v1/sprints/${sprintA.id}/start`, { method: "POST" }],
       [
         `/api/v1/sprints/${sprintA.id}/complete`,
@@ -345,6 +348,49 @@ async function main() {
         !rosterIds.includes(user.id),
       rosterIds,
     );
+
+    /*
+     * The sharpest new write. `label_ids` names rows in another table, so the
+     * card's tenant proof does not cover them — B owns this card, and could
+     * hang A's label on it unless the ids are checked against B's workspace.
+     * The board would then render A's label name and colour on B's board.
+     */
+    console.log("\n5c. a foreign label cannot be attached to your own card");
+    const [labelA] = await db
+      .insert(labelsTable)
+      .values({
+        workspaceId: tenantA.id,
+        name: `${MARKER} tenant A label`,
+        color: "#ef4444",
+      })
+      .returning({ id: labelsTable.id });
+
+    const stolen = await bearerB(`/api/v1/cards/${fixture.cardId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ label_ids: [labelA.id] }),
+    });
+    check(
+      "attaching another tenant's label to your own card is 404",
+      stolen.status === 404,
+      stolen.status,
+    );
+
+    const attachedRows = await db
+      .select({ labelId: cardLabels.labelId })
+      .from(cardLabels)
+      .where(eq(cardLabels.cardId, fixture.cardId));
+    check(
+      "and nothing was written to card_labels",
+      attachedRows.length === 0,
+      attachedRows,
+    );
+
+    check(
+      "the refusal is byte-identical to a missing row",
+      (await stolen.text()) === missingBody,
+    );
+
+    await db.delete(labelsTable).where(eq(labelsTable.id, labelA.id));
 
     console.log("\n6. nothing was written");
     const [cardAfter] = await db

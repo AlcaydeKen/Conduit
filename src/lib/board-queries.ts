@@ -68,13 +68,21 @@ export async function getBoard(
       ? isNull(cards.sprintId)
       : or(eq(cards.sprintId, sprintFilter), isNull(cards.sprintId));
 
-  const [sprintRows, columnRows, cardRows] = await Promise.all([
+  const [sprintRows, columnRows, labelRoster, cardRows] = await Promise.all([
     listSprints(workspaceId),
     db
       .select()
       .from(columns)
       .where(eq(columns.workspaceId, workspaceId))
       .orderBy(asc(columns.position), asc(columns.id)),
+    // The workspace's labels, not just the ones in use. The filter bar and the
+    // drawer's selector both need the full list, and it rides along here rather
+    // than costing them a fetch each — this query set already touches `labels`.
+    db
+      .select({ id: labels.id, name: labels.name, color: labels.color })
+      .from(labels)
+      .where(eq(labels.workspaceId, workspaceId))
+      .orderBy(asc(labels.name), asc(labels.id)),
     db
       .select({
         id: cards.id,
@@ -91,7 +99,17 @@ export async function getBoard(
       })
       .from(cards)
       .leftJoin(users, eq(users.id, cards.assigneeId))
-      .where(and(eq(cards.workspaceId, workspaceId), sprintPredicate))
+      // Archived cards are off the board entirely. Not a filter the user can
+      // clear — a filter is about what you want to look at now, and an archived
+      // card has been declared finished with. `GET /cards?archived=true` is
+      // where they can still be found.
+      .where(
+        and(
+          eq(cards.workspaceId, workspaceId),
+          isNull(cards.archivedAt),
+          sprintPredicate,
+        ),
+      )
       // The tie-breaker every ordered read in this system must carry.
       .orderBy(asc(cards.position), asc(cards.id)),
   ]);
@@ -148,6 +166,7 @@ export async function getBoard(
       position: column.position,
       wip_limit: column.wipLimit,
     })),
+    labels: labelRoster,
     // Both lists keep the `position ASC, id ASC` order the query produced.
     cards: cardRows.filter(inSelectedView).map(toBoardCard),
     backlog:

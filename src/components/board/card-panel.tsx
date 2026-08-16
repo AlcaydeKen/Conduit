@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Loader2, Pencil, Sparkles } from "lucide-react";
+import { Archive, Loader2, Pencil, Sparkles, Undo2 } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import useSWR from "swr";
@@ -25,8 +25,9 @@ import {
   toneOf,
 } from "@/components/activity/shared";
 import { CardEditForm } from "@/components/board/card-edit-form";
+import { LabelPicker } from "@/components/board/label-picker";
 import { cn } from "@/lib/utils";
-import type { BoardCard, CardComment, Person } from "@/types/board";
+import type { BoardCard, BoardLabel, CardComment, Person } from "@/types/board";
 
 const fetcher = async (url: string) => {
   const response = await fetch(url, { headers: { accept: "application/json" } });
@@ -85,6 +86,7 @@ export function CardPanel({
   cardId,
   card,
   workspaceId,
+  labels,
   onClose,
   onCardChanged,
 }: {
@@ -92,11 +94,15 @@ export function CardPanel({
   card: BoardCard | null;
   /** Explicit rather than inferred: the roster is per workspace. */
   workspaceId: number;
+  /** Every label in the workspace, from the board payload. */
+  labels: BoardLabel[];
   onClose: () => void;
   /** Lets the board re-read once a job finishes or the card is edited. */
   onCardChanged?: () => void;
 }) {
   const [editing, setEditing] = useState(false);
+  const [archiving, setArchiving] = useState(false);
+  const [confirmArchive, setConfirmArchive] = useState(false);
   const [draft, setDraft] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -136,7 +142,32 @@ export function CardPanel({
   // card unless something clears it.
   useEffect(() => {
     setEditing(false);
+    setConfirmArchive(false);
   }, [cardId]);
+
+  /** The API takes the complete set, so both callers below send one. */
+  async function patchCard(body: Record<string, unknown>): Promise<boolean> {
+    if (!cardId) return false;
+    const response = await fetch(`/api/v1/cards/${cardId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) return false;
+    onCardChanged?.();
+    void mutateHistory();
+    return true;
+  }
+
+  async function archiveCard() {
+    setArchiving(true);
+    const done = await patchCard({ archived: true });
+    setArchiving(false);
+    setConfirmArchive(false);
+    // Close on success: the card is off the board, and leaving its drawer open
+    // over an empty board is a view of something that is no longer there.
+    if (done) onClose();
+  }
 
   /**
    * A flat interval, running whenever the drawer is open.
@@ -247,18 +278,18 @@ export function CardPanel({
         </SheetHeader>
 
         <div className="flex-1 space-y-5 overflow-y-auto px-4 pb-6">
-          {card && card.labels.length > 0 ? (
-            <div className="flex flex-wrap gap-1">
-              {card.labels.map((label) => (
-                <Badge
-                  key={label.id}
-                  className="text-[10px] text-white"
-                  style={{ backgroundColor: label.color }}
-                >
-                  {label.name}
-                </Badge>
-              ))}
-            </div>
+          {card ? (
+            <LabelPicker
+              available={labels}
+              selected={card.labels.map((label) => label.id)}
+              workspaceId={workspaceId}
+              /* Fire and revalidate rather than hold local state: the picker
+                 renders from `card.labels`, which the board's poll refreshes,
+                 so a failed request self-corrects on the next tick instead of
+                 leaving the UI insisting on a label the server rejected. */
+              onChange={(labelIds) => void patchCard({ label_ids: labelIds })}
+              onLabelCreated={() => onCardChanged?.()}
+            />
           ) : null}
 
           {card && editing ? (
@@ -282,14 +313,55 @@ export function CardPanel({
                 </p>
               )}
               {card ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setEditing(true)}
-                >
-                  <Pencil className="size-3.5" />
-                  Edit
-                </Button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setEditing(true)}
+                  >
+                    <Pencil className="size-3.5" />
+                    Edit
+                  </Button>
+
+                  {/* Two steps, because archiving removes the card from every
+                      board and the first click is one pixel from Edit. The
+                      confirmation says where it goes, not just "are you sure" —
+                      the reversibility is the reassurance. */}
+                  {confirmArchive ? (
+                    <>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => void archiveCard()}
+                        disabled={archiving}
+                      >
+                        <Archive className="size-3.5" />
+                        {archiving ? "Archiving…" : "Archive it"}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setConfirmArchive(false)}
+                        disabled={archiving}
+                      >
+                        <Undo2 className="size-3.5" />
+                        Keep it
+                      </Button>
+                      <span className="text-muted-foreground text-xs">
+                        Off the board, not deleted — comments and history stay.
+                      </span>
+                    </>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setConfirmArchive(true)}
+                    >
+                      <Archive className="size-3.5" />
+                      Archive
+                    </Button>
+                  )}
+                </div>
               ) : null}
             </div>
           )}

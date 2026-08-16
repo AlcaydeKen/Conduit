@@ -23,6 +23,7 @@ export type CardFilters = {
   columns: number[];
   assignees: AssigneeFilter[];
   priorities: Priority[];
+  labels: number[];
   /** Free text over title and description. Empty means no constraint. */
   query: string;
 };
@@ -31,6 +32,7 @@ export const EMPTY_FILTERS: CardFilters = {
   columns: [],
   assignees: [],
   priorities: [],
+  labels: [],
   query: "",
 };
 
@@ -41,6 +43,7 @@ export function isFiltering(filters: CardFilters): boolean {
     filters.columns.length > 0 ||
     filters.assignees.length > 0 ||
     filters.priorities.length > 0 ||
+    filters.labels.length > 0 ||
     filters.query.trim().length > 0
   );
 }
@@ -71,6 +74,19 @@ export function matchesCard(card: BoardCard, filters: CardFilters): boolean {
   if (filters.assignees.length > 0) {
     const key = card.assignee ? card.assignee.id : UNASSIGNED;
     if (!filters.assignees.includes(key)) return false;
+  }
+
+  /*
+   * OR within the dimension, like the others: a card matches if it carries any
+   * of the selected labels, not all of them.
+   *
+   * "All of them" is the other reasonable reading, and it is the wrong default
+   * here — selecting two labels to see both kinds of work is the common case,
+   * and intersection would usually return nothing on a board this size.
+   */
+  if (filters.labels.length > 0) {
+    const hit = card.labels.some((label) => filters.labels.includes(label.id));
+    if (!hit) return false;
   }
 
   /*
@@ -113,11 +129,15 @@ export function visibleColumns(
 /**
  * The assignees actually present on the board, deduped and sorted by name.
  *
- * Derived from the cards on hand rather than from `GET /api/v1/members`, and
- * that is the right source for a *filter*: offering to filter by someone who
- * holds no cards would only ever produce an empty board. The members route
- * exists for the assignee picker, where the opposite is true — you must be able
- * to give a card to someone who has none.
+ * No longer what the filter bar renders — it lists the whole roster from
+ * `GET /api/v1/members`. An earlier comment here argued the opposite, that
+ * offering someone with no cards "would only ever produce an empty board". That
+ * was wrong: filtering to a colleague and seeing nothing is how you learn they
+ * have nothing assigned, which is a question people actually ask. A roster that
+ * changes shape depending on who happens to hold a card is also a moving target
+ * to aim at.
+ *
+ * Kept because it is still the right answer when there is no roster to hand.
  */
 export function collectAssignees(cards: BoardCard[]): Person[] {
   const seen = new Map<string, Person>();

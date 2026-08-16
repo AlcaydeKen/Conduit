@@ -1,4 +1,4 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray, notInArray } from "drizzle-orm";
 import { z } from "zod";
 
 import { db } from "@/db";
@@ -10,7 +10,12 @@ import {
   workspaceMembers,
 } from "@/db/schema";
 import { logActivity } from "@/lib/api/activity";
-import { assigneeJoin, cardProjection, toApiCard } from "@/lib/api/cards";
+import {
+  assigneeJoin,
+  cardProjection,
+  labelsByCard,
+  toApiCard,
+} from "@/lib/api/cards";
 import {
   loadCardForActor,
   parseIntParam,
@@ -32,7 +37,23 @@ const patchSchema = z
     priority: z.enum(["low", "medium", "high", "urgent"]).optional(),
     points: z.number().int().min(0).max(1000).nullish(),
     assignee_id: z.string().trim().min(1).max(255).nullish(),
+    /**
+     * The card's complete label set, not a delta. An empty array clears them.
+     *
+     * Replace rather than add/remove because the drawer holds the whole set on
+     * screen and sends what it should end up as; a delta API would need the
+     * client to diff against a list that the 5s poll may already have changed
+     * under it, which is the bug the edit form's snapshot exists to avoid.
+     */
+    label_ids: z.array(z.number().int().positive()).max(50).optional(),
+    /** Archive or restore. The row is never deleted — see `cards.archived_at`. */
+    archived: z.boolean().optional(),
   })
+  /*
+   * An empty body is refused here, not further down. Zod strips unknown keys
+   * first, so `{"position": "zzz"}` — a caller trying to reorder through the
+   * edit endpoint — arrives as `{}` and is rejected by exactly this line.
+   */
   .refine((body) => Object.keys(body).length > 0, {
     message: "no_fields_to_update",
   });
@@ -71,7 +92,7 @@ export async function GET(
 
   if (!row) return notFound();
 
-  return ok({ card: { ...toApiCard(row), labels: cardLabelRows } });
+  return ok({ card: toApiCard(row, cardLabelRows) });
 }
 
 export async function PATCH(
@@ -118,22 +139,33 @@ export async function PATCH(
   if (body.assignee_id !== undefined) {
     patch.assigneeId = body.assignee_id ?? null;
   }
+  if (body.archived !== undefined) {
+    patch.archivedAt = body.archived ? new Date() : null;
+  }
 
   /*
-   * A body with no editable field is refused rather than written.
+   * Every label must belong to this card's workspace, checked in one statement
+   * against the tenant the card proved — not by trusting the ids.
    *
-   * Every field here is optional, so `{}` and `{"position": "zzz"}` both parse
-   * cleanly and would otherwise reach the UPDATE as `SET updated_at = now()` —
-   * a write that changes nothing, bumps the column any future optimistic
-   * concurrency check would key on, and appends `card.update` with an empty
-   * field list to a card's history. Three costs for an operation the caller did
-   * not ask for.
-   *
-   * 400 rather than 200: a request naming only fields this route refuses is a
-   * caller misunderstanding the contract, and answering "fine" teaches them the
-   * write went through.
+   * Without it, `label_ids: [<id from another tenant>]` would attach a
+   * foreign label to this card, and the board would then render another
+   * workspace's label name and colour. Counting is enough: the ids are already
+   * a set, so if every one of them resolves inside this workspace, all of them
+   * are legitimate.
    */
-  if (Object.keys(patch).length === 1) return badRequest("no_editable_fields");
+  if (body.label_ids !== undefined && body.label_ids.length > 0) {
+    const wanted = [...new Set(body.label_ids)];
+    const owned = await db
+      .select({ id: labels.id })
+      .from(labels)
+      .where(
+        and(
+          inArray(labels.id, wanted),
+          eq(labels.workspaceId, scoped.workspaceId),
+        ),
+      );
+    if (owned.length !== wanted.length) return notFound();
+  }
 
   const [updated] = await db
     .update(cards)
@@ -147,15 +179,58 @@ export async function PATCH(
 
   if (!updated) return notFound();
 
+  /*
+   * Reconcile the label set: add what is missing, then remove what is extra.
+   *
+   * That order is deliberate. neon-http has no interactive transaction, so
+   * these are two independent statements and a failure between them is
+   * possible. Adding first means the failure mode is a card carrying a label
+   * too many — visible on the board and fixed by saving again. Deleting first
+   * means the failure mode is labels silently gone, which nobody notices until
+   * they go looking for a card by its label and it is not there.
+   */
+  if (body.label_ids !== undefined) {
+    const wanted = [...new Set(body.label_ids)];
+
+    if (wanted.length > 0) {
+      await db
+        .insert(cardLabels)
+        .values(wanted.map((labelId) => ({ cardId, labelId })))
+        .onConflictDoNothing();
+    }
+
+    await db
+      .delete(cardLabels)
+      .where(
+        wanted.length > 0
+          ? and(
+              eq(cardLabels.cardId, cardId),
+              notInArray(cardLabels.labelId, wanted),
+            )
+          : eq(cardLabels.cardId, cardId),
+      );
+  }
+
   await logActivity({
     workspaceId: scoped.workspaceId,
     cardId,
     actor,
-    action: "card.update",
+    action: body.archived === undefined
+      ? "card.update"
+      : body.archived
+        ? "card.archive"
+        : "card.restore",
+    // Field names only, no values. Enough to see who touched what and when;
+    // reconstructing an old value is what the card itself is for.
     payload: { fields: Object.keys(body) },
   });
 
+  const labelsFor = await labelsByCard([cardId]);
+
   return ok({
-    card: toApiCard({ ...updated, assigneeName: null, assigneeImage: null }),
+    card: toApiCard(
+      { ...updated, assigneeName: null, assigneeImage: null },
+      labelsFor.get(cardId) ?? [],
+    ),
   });
 }

@@ -46,6 +46,7 @@ import {
 import type {
   BoardCard,
   BoardPayload,
+  Person,
   WorkspaceSummary,
 } from "@/types/board";
 
@@ -66,6 +67,12 @@ const DROP_ANIMATION: DropAnimation = {
 const fetcher = async (url: string): Promise<BoardPayload> => {
   const response = await fetch(url, { headers: { accept: "application/json" } });
   if (!response.ok) throw new Error(`board_fetch_failed_${response.status}`);
+  return response.json();
+};
+
+const membersFetcher = async (url: string): Promise<{ members: Person[] }> => {
+  const response = await fetch(url, { headers: { accept: "application/json" } });
+  if (!response.ok) throw new Error(`members_fetch_failed_${response.status}`);
   return response.json();
 };
 
@@ -121,6 +128,18 @@ export function Board({
   });
 
   const board = data ?? initialBoard;
+
+  /*
+   * The roster, for the assignee chips. Deliberately not on `refreshInterval`:
+   * membership changes are a hand-written SQL statement in this system (see
+   * `resolveKeyActor`), so polling it every five seconds would spend a request
+   * per tick on a list that changes about once a quarter.
+   */
+  const { data: memberData } = useSWR(
+    `/api/v1/members?workspace=${board.workspace.id}`,
+    membersFetcher,
+    { revalidateOnFocus: false },
+  );
 
   // Column ids and user ids are scoped to one workspace. Carrying a filter
   // across a switch would match nothing and read as an empty board, and a
@@ -508,6 +527,8 @@ export function Board({
       <FilterBar
         columns={board.columns}
         cards={allCards}
+        labels={board.labels}
+        members={memberData?.members ?? null}
         filters={filters}
         onChange={setFilters}
         visibleCount={visibleCount}
@@ -595,6 +616,7 @@ export function Board({
         cardId={openCardId}
         card={allCards.find((card) => card.id === openCardId) ?? null}
         workspaceId={board.workspace.id}
+        labels={board.labels}
         onClose={() => setOpenCardId(null)}
         onCardChanged={() => void mutate()}
       />

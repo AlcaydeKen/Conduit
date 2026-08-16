@@ -533,6 +533,46 @@ It also makes the audit log honest as a side effect: `card.update` records `Obje
 and nothing else — no before, no after — so a full-form submit reported all five fields as
 edited every time, and a clobbered title left no trace of its old value anywhere.
 
+### Round 2 — labels, roster, archiving — done
+
+- [x] `GET/POST /api/v1/labels`. No DELETE: `card_labels` cascades, so deleting a label would
+      strip it from every card silently, and `activity` records label changes by id — a deleted
+      label turns that history into dangling numbers. Detaching from a card is the reversible
+      operation and the one people mean.
+- [x] `label_ids` on `PATCH /cards/:id`, replace-set rather than delta. Every id is checked
+      against the card's workspace: the card's tenant proof does not cover rows in another
+      table, so without it a key could hang another tenant's label on its own card and the
+      board would render a foreign name and colour.
+- [x] Label picker in the drawer, with inline creation. Creating from a card attaches it
+      immediately — you already said what you wanted.
+- [x] Labels as a filter dimension, OR within the dimension like the others.
+- [x] The assignee filter lists the whole roster from `/api/v1/members`, not just people
+      holding cards. This reverses a decision recorded in round 1; the old comment argued an
+      empty result was useless, but filtering to a colleague and seeing nothing is exactly how
+      you learn they have nothing assigned.
+- [x] `cards.archived_at`, migration `0001_brown_colonel_america.sql`, applied with
+      `db:push`. Archived cards leave the board, the default card list, and every ordering
+      scope; `GET /cards?archived=true` is how they are found again.
+- [x] Archive button in the drawer, two-step, saying where the card goes rather than just
+      asking whether you are sure.
+
+### Round 2 notes
+
+- **Label reconciliation adds before it removes.** neon-http has no interactive transaction,
+  so the two statements can fail between them. Adding first fails as a card with one label too
+  many — visible, and fixed by saving again. Removing first fails as labels silently gone,
+  which nobody notices until they look for a card by label and it is not there.
+- **Archived cards are outside every `OrderScope`.** A scope is the key space for what is
+  displayed together, and an archived card is displayed nowhere; leaving them in would make
+  `readOrder` return rows the client cannot see, so an append would land after an invisible
+  card. The cost is that a restored card carries a key from the old numbering, which is
+  bounded — `id ASC` keeps every client agreeing, and the next move rebalances.
+- **A correction to round 1.** The `no_editable_fields` check added in `efb7c21` was
+  unreachable: `patchSchema` has carried a `.refine` rejecting empty bodies since the machine
+  API landed, and zod strips unknown keys before it runs, so `{}` and `{"position": "zzz"}`
+  were already 400. That commit message describes a bug that did not exist. The dirty-fields
+  half of it was real; the tests are kept, since the refine had no coverage before.
+
 ### Not done, in priority order
 
 - Labels are still half-built: schema, join table, board payload and both render paths exist,
